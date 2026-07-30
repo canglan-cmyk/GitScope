@@ -1,0 +1,98 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build, package and release
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$(ls -d /Applications/Xcode_26*.app | sort -V | tail -1)/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install Tuist
+        run: |
+          curl https://mise.run | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/share/mise/shims" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/mise" install tuist@4.197.0
+          "$HOME/.local/bin/mise" use -g tuist@4.197.0
+          "$HOME/.local/bin/mise" exec tuist@4.197.0 -- tuist version
+
+      - name: Generate workspace
+        run: mise exec tuist@4.197.0 -- tuist generate --no-open
+
+      - name: Run tests
+        run: |
+          set -o pipefail
+          for scheme in DiffCore DiffRenderKit GitEngine; do
+            xcodebuild test \
+              -workspace GitScope.xcworkspace \
+              -scheme "$scheme" \
+              -destination 'platform=macOS' \
+              -quiet
+          done
+
+      - name: Build Release app
+        run: |
+          set -o pipefail
+          xcodebuild build \
+            -workspace GitScope.xcworkspace \
+            -scheme GitScope \
+            -configuration Release \
+            -destination 'platform=macOS' \
+            -derivedDataPath build \
+            CODE_SIGN_IDENTITY=- \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=YES \
+            -quiet
+
+      - name: Ad-hoc sign
+        run: |
+          APP="build/Build/Products/Release/GitScope.app"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --verbose "$APP"
+
+      - name: Package DMG
+        run: |
+          APP="build/Build/Products/Release/GitScope.app"
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_NAME" = "$VERSION" ] && VERSION="dev-$(git rev-parse --short HEAD)"
+          bash scripts/make_dmg.sh "$APP" "GitScope-${VERSION}.dmg"
+          echo "DMG_NAME=GitScope-${VERSION}.dmg" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.DMG_NAME }}
+          generate_release_notes: true
+          body: |
+            ## 安装说明 / Installation
+
+            1. 下载并打开 `GitScope-*.dmg`
+            2. 把 **GitScope** 拖入 **Applications** 文件夹
+            3. 首次打开:由于应用未经过 Apple 公证,请在 **应用程序** 中 **右键 → 打开**,或前往 **系统设置 → 隐私与安全性** 点击「仍要打开」
+
+            Requires macOS 14.0+.
+
+      - name: Upload artifact (non-tag builds)
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitScope-dmg
+          path: "*.dmg"

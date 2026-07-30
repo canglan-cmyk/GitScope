@@ -1,0 +1,14 @@
+# Xcode / Tuist
+Derived/
+*.xcworkspace
+*.xcodeproj
+.DS_Store
+DerivedData/
+Tuist/.build/
+.build/
+
+# Local docs (kept out of the repo)
+docs/
+
+# Debug/snapshot artifacts at repo root
+/*.png
