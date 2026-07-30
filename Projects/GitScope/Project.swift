@@ -26,6 +26,7 @@ let project = Project(
                 .project(target: "DiffCore", path: "../DiffCore"),
                 .project(target: "DiffRenderKit", path: "../DiffRenderKit"),
                 .project(target: "GitEngine", path: "../GitEngine"),
+                .external(name: "SwiftTerm"),
             ]
         ),
     ]
