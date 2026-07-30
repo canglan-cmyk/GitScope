@@ -3,6 +3,12 @@ import ProjectDescriptionHelpers
 
 let project = Project(
     name: "GitScope",
+    packages: [
+        .remote(
+            url: "https://github.com/migueldeicaza/SwiftTerm.git",
+            requirement: .upToNextMajor(from: "1.2.0")
+        ),
+    ],
     settings: .settings(
         base: sharedSettings.merging([
             "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
@@ -26,7 +32,7 @@ let project = Project(
                 .project(target: "DiffCore", path: "../DiffCore"),
                 .project(target: "DiffRenderKit", path: "../DiffRenderKit"),
                 .project(target: "GitEngine", path: "../GitEngine"),
-                .external(name: "SwiftTerm"),
+                .package(product: "SwiftTerm"),
             ]
         ),
     ]

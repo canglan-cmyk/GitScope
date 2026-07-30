@@ -252,6 +252,85 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         selection = nil
     }
 
+    /// Rich context of the current selection for AI referencing:
+    /// file path, line-number span and the selected code lines.
+    public struct SelectionContext {
+        public let filePath: String
+        public let lineDescription: String
+        public let code: String
+    }
+
+    /// Callback fired when the user asks to send the current selection to
+    /// the AI panel (floating button / context menu / ⌘⇧A).
+    public var onSendToAI: ((SelectionContext) -> Void)?
+
+    /// Whether a non-empty selection exists.
+    public var hasSelection: Bool {
+        guard let selection else { return false }
+        return !selection.isEmpty
+    }
+
+    /// Builds the AI-reference context for the current selection.
+    public func selectionContext() -> SelectionContext? {
+        guard let document, let selection, !selection.isEmpty else { return nil }
+
+        // Collect the selected line rows (skip headers/placeholders).
+        var filePath: String?
+        var lineNumbers: [Int] = []
+        var codeLines: [String] = []
+
+        for row in selection.start.row...selection.end.row {
+            guard rows.indices.contains(row) else { continue }
+            var fileIndex: Int?
+            var line: DiffLine?
+            switch rows[row] {
+            case .line(let f, let h, let l):
+                fileIndex = f
+                line = document.files[f].hunks[h].lines[l]
+            case .splitLine(let f, let h, let oldL, let newL):
+                fileIndex = f
+                let lines = document.files[f].hunks[h].lines
+                if let idx = newL ?? oldL { line = lines[idx] }
+            default:
+                continue
+            }
+            guard let fileIndex, let line else { continue }
+            if filePath == nil {
+                filePath = document.files[fileIndex].canonicalPath
+            }
+            if let number = line.newLineNumber ?? line.oldLineNumber {
+                lineNumbers.append(number)
+            }
+            let marker: String
+            switch line.change {
+            case .addition: marker = "+"
+            case .deletion: marker = "-"
+            case .context: marker = " "
+            }
+            codeLines.append(marker + line.content)
+        }
+
+        guard let filePath, !codeLines.isEmpty else { return nil }
+        let lineDescription: String
+        if let first = lineNumbers.first, let last = lineNumbers.last, first != last {
+            lineDescription = "L\(first)-L\(last)"
+        } else if let first = lineNumbers.first {
+            lineDescription = "L\(first)"
+        } else {
+            lineDescription = ""
+        }
+        return SelectionContext(
+            filePath: filePath,
+            lineDescription: lineDescription,
+            code: codeLines.joined(separator: "\n")
+        )
+    }
+
+    func sendSelectionToAI() {
+        guard let context = selectionContext() else { return }
+        onSendToAI?(context)
+    }
+
     /// Plain-text of the current selection: one line per row, no line
     /// numbers, no +/- markers — pasteable straight into code.
     func selectedText() -> String? {
@@ -327,6 +406,10 @@ final class DiffSelectionTableView: NSTableView {
     override func keyDown(with event: NSEvent) {
         if event.modifierFlags.contains(.command),
            let key = event.charactersIgnoringModifiers?.lowercased() {
+            if event.modifierFlags.contains(.shift), key == "a" {
+                selectionOwner?.sendSelectionToAI()
+                return
+            }
             switch key {
             case "c":
                 selectionOwner?.copySelection()
@@ -339,6 +422,26 @@ final class DiffSelectionTableView: NSTableView {
             }
         }
         super.keyDown(with: event)
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        guard let owner = selectionOwner, owner.hasSelection else {
+            return super.menu(for: event)
+        }
+        let menu = NSMenu()
+        menu.addItem(withTitle: "复制", action: #selector(copy(_:)), keyEquivalent: "")
+        let sendItem = NSMenuItem(
+            title: "发送到 AI 输入框",
+            action: #selector(sendToAI(_:)),
+            keyEquivalent: ""
+        )
+        sendItem.target = self
+        menu.addItem(sendItem)
+        return menu
+    }
+
+    @objc private func sendToAI(_ sender: Any?) {
+        selectionOwner?.sendSelectionToAI()
     }
 
     @objc func copy(_ sender: Any?) {

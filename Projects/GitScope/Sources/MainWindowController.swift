@@ -30,7 +30,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
 
     private let sidebar = FileTreeSidebarController()
     private let diffList = DiffListViewController()
+    private let aiPanel = AITerminalPanelController()
+    private var aiPanelItem: NSSplitViewItem?
     private let splitViewController = NSSplitViewController()
+    private var workspaceWatcher: WorkspaceWatcher?
 
     // MARK: Setup
 
@@ -81,10 +84,24 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         let contentItem = NSSplitViewItem(viewController: diffList)
         contentItem.minimumThickness = 400
 
+        // AI terminal panel: collapsible right-hand pane.
+        let aiItem = NSSplitViewItem(viewController: aiPanel)
+        aiItem.minimumThickness = 320
+        aiItem.maximumThickness = 640
+        aiItem.canCollapse = true
+        aiItem.isCollapsed = true
+        aiPanelItem = aiItem
+
         splitViewController.addSplitViewItem(sidebarItem)
         splitViewController.addSplitViewItem(contentItem)
+        splitViewController.addSplitViewItem(aiItem)
 
         window.contentViewController = splitViewController
+
+        // Diff selection → AI input box.
+        diffList.onSendToAI = { [weak self] context in
+            self?.sendSelectionToAIPanel(context)
+        }
 
         // Toolbar: sidebar toggle on the left, open-repository on the right.
         let toolbar = NSToolbar(identifier: "MainToolbar")
@@ -173,30 +190,110 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     // MARK: NSToolbarDelegate
 
     private static let openRepoItemID = NSToolbarItem.Identifier("OpenRepository")
+    private static let reviewItemID = NSToolbarItem.Identifier("ReviewDiff")
+    private static let aiPanelItemID = NSToolbarItem.Identifier("ToggleAIPanel")
 
     func toolbar(
         _ toolbar: NSToolbar,
         itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
-        guard itemIdentifier == Self.openRepoItemID else { return nil }
-        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.label = "打开仓库"
-        item.paletteLabel = "打开仓库"
-        item.toolTip = "打开一个本地 Git 仓库"
-        item.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "打开仓库")
-        item.target = self
-        item.action = #selector(openRepository)
-        item.isBordered = true
-        return item
+        switch itemIdentifier {
+        case Self.openRepoItemID:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "打开仓库"
+            item.paletteLabel = "打开仓库"
+            item.toolTip = "打开一个本地 Git 仓库"
+            item.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "打开仓库")
+            item.target = self
+            item.action = #selector(openRepository)
+            item.isBordered = true
+            return item
+        case Self.reviewItemID:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "AI Review"
+            item.paletteLabel = "AI Review"
+            item.toolTip = "让 AI review 本次 diff"
+            item.image = NSImage(systemSymbolName: "sparkles", accessibilityDescription: "AI Review")
+            item.target = self
+            item.action = #selector(reviewCurrentDiff)
+            item.isBordered = true
+            return item
+        case Self.aiPanelItemID:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "AI 面板"
+            item.paletteLabel = "AI 面板"
+            item.toolTip = "显示/隐藏 AI 终端面板"
+            item.image = NSImage(systemSymbolName: "terminal", accessibilityDescription: "AI 面板")
+            item.target = self
+            item.action = #selector(toggleAIPanel)
+            item.isBordered = true
+            return item
+        default:
+            return nil
+        }
     }
 
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.openRepoItemID]
+        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace,
+         Self.openRepoItemID, Self.reviewItemID, Self.aiPanelItemID]
     }
 
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.openRepoItemID]
+        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace,
+         Self.openRepoItemID, Self.reviewItemID, Self.aiPanelItemID]
+    }
+
+    // MARK: AI panel
+
+    @objc private func toggleAIPanel() {
+        guard let aiPanelItem else { return }
+        aiPanelItem.animator().isCollapsed.toggle()
+        if !aiPanelItem.isCollapsed, let repositoryURL {
+            aiPanel.activate(repository: repositoryURL)
+        }
+    }
+
+    private func revealAIPanel() {
+        guard let aiPanelItem else { return }
+        if aiPanelItem.isCollapsed {
+            aiPanelItem.animator().isCollapsed = false
+        }
+        if let repositoryURL {
+            aiPanel.activate(repository: repositoryURL)
+        }
+    }
+
+    private func sendSelectionToAIPanel(_ context: DiffListViewController.SelectionContext) {
+        revealAIPanel()
+        let lineInfo = context.lineDescription.isEmpty ? "" : " \(context.lineDescription)"
+        let text = """
+        关于 \(context.filePath)\(lineInfo)（本次 diff 中的代码，+ 为新增、- 为删除）:
+
+        ```
+        \(context.code)
+        ```
+
+        """
+        // Give the panel a beat to start the session if it just opened.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.aiPanel.send(text: text)
+        }
+    }
+
+    @objc private func reviewCurrentDiff() {
+        guard repositoryURL != nil,
+              let base = basePopup.titleOfSelectedItem,
+              let head = headPopup.titleOfSelectedItem else { return }
+        revealAIPanel()
+        let spec = modePopup.indexOfSelectedItem == 0 ? "\(base)...\(head)" : "\(base)..\(head)"
+        let text = """
+        请 review 本仓库中 `\(spec)` 的变更（可用 `git diff \(spec)` 查看）。
+        关注：潜在 bug、并发问题、边界条件、命名与可读性，给出具体文件与行号。
+        """
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            self?.aiPanel.send(text: text)
+        }
     }
 
     // MARK: Actions
@@ -227,6 +324,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             populateRefPopups(current: current)
             statusLabel.stringValue = "已加载 \(refs.count) 个引用"
             refreshDiff()
+
+            // Keep AI panel pointed at the repo; refresh diff when the
+            // workspace changes (e.g. the AI edits files).
+            if aiPanelItem?.isCollapsed == false {
+                aiPanel.activate(repository: root)
+            } else {
+                aiPanel.repositoryURL = root
+            }
+            workspaceWatcher?.invalidate()
+            workspaceWatcher = WorkspaceWatcher(url: root) { [weak self] in
+                self?.refreshDiff()
+            }
         } catch {
             showErrorAlert(error)
         }
