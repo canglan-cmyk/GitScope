@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var mainWindowController: MainWindowController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        UpdaterController.shared.start()
         let controller = MainWindowController()
         controller.showWindow(nil)
         controller.window?.makeKeyAndOrderFront(nil)

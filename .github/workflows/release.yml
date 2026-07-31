@@ -33,8 +33,23 @@ jobs:
           "$HOME/.local/bin/mise" use -g tuist@4.197.0
           "$HOME/.local/bin/mise" exec tuist@4.197.0 -- tuist version
 
-      - name: Generate workspace
-        run: mise exec tuist@4.197.0 -- tuist generate --no-open
+      - name: Determine version
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          [ "$GITHUB_REF_NAME" = "$VERSION" ] && VERSION="0.0.0-dev"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Sync manifest version with tag
+        run: |
+          # Keep the app's version in lockstep with the release tag so
+          # Sparkle version comparison works.
+          sed -i '' "s/^let appVersion = \".*\"/let appVersion = \"$VERSION\"/" Projects/GitScope/Project.swift
+          grep "let appVersion" Projects/GitScope/Project.swift
+
+      - name: Install dependencies and generate workspace
+        run: |
+          mise exec tuist@4.197.0 -- tuist install
+          mise exec tuist@4.197.0 -- tuist generate --no-open
 
       - name: Run tests
         run: |
@@ -70,10 +85,66 @@ jobs:
       - name: Package DMG
         run: |
           APP="build/Build/Products/Release/GitScope.app"
-          VERSION="${GITHUB_REF_NAME#v}"
-          [ "$GITHUB_REF_NAME" = "$VERSION" ] && VERSION="dev-$(git rev-parse --short HEAD)"
           bash scripts/make_dmg.sh "$APP" "GitScope-${VERSION}.dmg"
           echo "DMG_NAME=GitScope-${VERSION}.dmg" >> "$GITHUB_ENV"
+
+      - name: Sign update and generate appcast
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          # Sparkle CLI tools come with the resolved SPM artifacts.
+          SIGN_UPDATE=$(find build/SourcePackages/artifacts -name sign_update -type f | head -1)
+          if [ -z "$SIGN_UPDATE" ]; then
+            # Fallback: resolve packages into a known location.
+            xcodebuild -resolvePackageDependencies \
+              -workspace GitScope.xcworkspace -scheme GitScope \
+              -derivedDataPath build
+            SIGN_UPDATE=$(find build/SourcePackages/artifacts -name sign_update -type f | head -1)
+          fi
+          echo "sign_update: $SIGN_UPDATE"
+
+          SIGNATURE_OUTPUT=$("$SIGN_UPDATE" "$DMG_NAME" --ed-key-file - <<< "$SPARKLE_PRIVATE_KEY")
+          echo "signature output: $SIGNATURE_OUTPUT"
+          ED_SIGNATURE=$(echo "$SIGNATURE_OUTPUT" | sed -n 's/.*sparkle:edSignature="\([^"]*\)".*/\1/p')
+          DMG_SIZE=$(echo "$SIGNATURE_OUTPUT" | sed -n 's/.*length="\([^"]*\)".*/\1/p')
+
+          DOWNLOAD_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/${DMG_NAME}"
+          PUB_DATE=$(date -u +"%a, %d %b %Y %H:%M:%S +0000")
+
+          mkdir -p appcast-site
+          cat > appcast-site/appcast.xml <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>GitScope</title>
+              <item>
+                <title>GitScope ${VERSION}</title>
+                <pubDate>${PUB_DATE}</pubDate>
+                <sparkle:version>${VERSION}</sparkle:version>
+                <sparkle:shortVersionString>${VERSION}</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <link>https://github.com/${GITHUB_REPOSITORY}/releases</link>
+                <sparkle:releaseNotesLink>https://github.com/${GITHUB_REPOSITORY}/releases/tag/${GITHUB_REF_NAME}</sparkle:releaseNotesLink>
+                <enclosure
+                  url="${DOWNLOAD_URL}"
+                  sparkle:edSignature="${ED_SIGNATURE}"
+                  length="${DMG_SIZE}"
+                  type="application/octet-stream" />
+              </item>
+            </channel>
+          </rss>
+          EOF
+          cat appcast-site/appcast.xml
+
+      - name: Publish appcast to gh-pages
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./appcast-site
+          publish_branch: gh-pages
+          keep_files: false
 
       - name: Create GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -87,6 +158,8 @@ jobs:
             1. 下载并打开 `GitScope-*.dmg`
             2. 把 **GitScope** 拖入 **Applications** 文件夹
             3. 首次打开:由于应用未经过 Apple 公证,请在 **应用程序** 中 **右键 → 打开**,或前往 **系统设置 → 隐私与安全性** 点击「仍要打开」
+
+            已安装旧版本的用户会通过应用内自动更新(Sparkle)收到本次更新。
 
             Requires macOS 14.0+.
 

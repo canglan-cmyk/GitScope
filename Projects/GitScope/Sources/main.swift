@@ -1,4 +1,5 @@
 import AppKit
+import Sparkle
 
 let app = NSApplication.shared
 let delegate = AppDelegate()
@@ -19,6 +20,14 @@ appMenu.addItem(
     action: #selector(NSApplication.orderFrontStandardAboutPanel(_:)),
     keyEquivalent: ""
 )
+appMenu.addItem(.separator())
+let checkUpdatesItem = NSMenuItem(
+    title: "检查更新…",
+    action: #selector(SPUStandardUpdaterController.checkForUpdates(_:)),
+    keyEquivalent: ""
+)
+checkUpdatesItem.target = UpdaterController.shared.menuTarget
+appMenu.addItem(checkUpdatesItem)
 appMenu.addItem(.separator())
 appMenu.addItem(
     withTitle: "Hide GitScope",
