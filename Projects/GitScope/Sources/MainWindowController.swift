@@ -6,9 +6,10 @@ import GitEngine
 /// Main window: NSSplitViewController with a sidebar (compare controls +
 /// changed-files tree) and the virtualized diff list as content.
 @MainActor
-final class MainWindowController: NSWindowController, NSToolbarDelegate {
+final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearchFieldDelegate {
 
-    private let engine: any GitEngine = GitCLIEngine()
+    private let engine = GitCLIEngine()
+    private let referenceFinder = ReferenceFinder()
 
     private var repositoryURL: URL? {
         didSet { updateWindowTitle() }
@@ -31,6 +32,21 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     private let sidebar = FileTreeSidebarController()
     private let diffList = DiffListViewController()
     private let splitViewController = NSSplitViewController()
+    private var workspaceWatcher: WorkspaceWatcher?
+
+    // Commit timeline
+    private var commits: [GitCommit] = []
+    private var selectedCommitSHA: String? // nil = whole-range diff
+    private let commitPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+
+    // Search bar (hidden until ⌘F)
+    private let searchBar = NSView()
+    private let searchField = NSSearchField()
+    private let searchResultLabel = NSTextField(labelWithString: "")
+    private let searchScopeControl = NSSegmentedControl(
+        labels: ["全部行", "仅变更行"], trackingMode: .selectOne, target: nil, action: nil
+    )
+    private var searchBarVisible = false
 
     // MARK: Setup
 
@@ -97,6 +113,202 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         sidebar.onSelectFile = { [weak self] fileIndex in
             self?.diffList.scrollToFile(at: fileIndex)
         }
+        sidebar.onOpenInEditor = { [weak self] fileIndex in
+            self?.openFileInEditor(fileIndex: fileIndex, line: nil)
+        }
+
+        diffList.onSearchResultsChanged = { [weak self] count, current in
+            self?.searchResultLabel.stringValue = count == 0 ? "无结果" : "\(current)/\(count)"
+        }
+
+        // Right-click actions inside the diff.
+        diffList.onFindReferences = { [weak self] context in
+            self?.findReferences(for: context)
+        }
+        diffList.onOpenSelectionInEditor = { [weak self] context in
+            self?.openInEditor(path: context.filePath, line: context.lineNumber)
+        }
+
+        // ⌘F anywhere in the window opens the search bar. Key events don't
+        // reliably reach the window controller, so use a local monitor.
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.window === self.window else { return event }
+            if event.modifierFlags.contains(.command),
+               event.charactersIgnoringModifiers?.lowercased() == "f" {
+                self.showSearchBar()
+                return nil
+            }
+            if event.keyCode == 53, self.searchBarVisible { // Esc
+                self.hideSearchBar()
+                return nil
+            }
+            return event
+        }
+
+        setupSearchBar()
+    }
+
+    // MARK: Reference finding
+
+    private func findReferences(for context: DiffListViewController.SelectionContext) {
+        guard let repositoryURL, let window else { return }
+        let word = context.selectedText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !word.isEmpty else { return }
+
+        let diffPaths = Set(diffList.document?.files.map(\.canonicalPath) ?? [])
+        statusLabel.stringValue = "查找“\(word)”的引用…"
+
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let raw = try await self.referenceFinder.findReferences(
+                    to: word, in: repositoryURL
+                )
+                let annotated = self.referenceFinder.annotate(raw, diffPaths: diffPaths)
+                self.statusLabel.stringValue =
+                    "“\(word)”：\(annotated.count) 处引用"
+
+                let panel = ReferencePanelController(identifier: word, references: annotated)
+                let sheetWindow = NSWindow(contentViewController: panel)
+                sheetWindow.styleMask = [.titled, .closable]
+                sheetWindow.title = "引用查找"
+                window.beginSheet(sheetWindow) { _ in }
+
+                // Double-click a row: close the sheet and jump to the editor.
+                panel.onJump = { [weak self] path, line in
+                    window.endSheet(sheetWindow)
+                    self?.openInEditor(path: path, line: line)
+                }
+                panel.onClose = {
+                    window.endSheet(sheetWindow)
+                }
+            } catch {
+                self.statusLabel.stringValue = "引用查找失败"
+            }
+        }
+    }
+
+    private func openInEditor(path: String, line: Int?) {
+        guard let repositoryURL else { return }
+        let fileURL = repositoryURL.appendingPathComponent(path)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else {
+            statusLabel.stringValue = "文件不在工作区：\(path)"
+            return
+        }
+        guard let editor = ExternalEditor.preferred else {
+            statusLabel.stringValue = "未检测到可用编辑器（Xcode/VS Code/Cursor）"
+            return
+        }
+        editor.open(file: fileURL, line: line)
+    }
+
+    private func setupSearchBar() {
+        guard let contentView = window?.contentView else { return }
+
+        searchBar.wantsLayer = true
+        searchBar.isHidden = true
+
+        let material = NSVisualEffectView()
+        material.material = .headerView
+        material.blendingMode = .withinWindow
+
+        searchField.placeholderString = "在 diff 中搜索（回车下一个，⇧回车上一个）"
+        searchField.delegate = self
+        searchField.target = self
+        searchField.action = #selector(searchFieldAction)
+
+        searchScopeControl.selectedSegment = 0
+        searchScopeControl.target = self
+        searchScopeControl.action = #selector(searchScopeChanged)
+        searchScopeControl.controlSize = .small
+
+        searchResultLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+        searchResultLabel.textColor = .secondaryLabelColor
+
+        let closeButton = NSButton(
+            image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "关闭")!,
+            target: self, action: #selector(hideSearchBar)
+        )
+        closeButton.isBordered = false
+
+        let stack = NSStackView(views: [searchField, searchScopeControl, searchResultLabel, closeButton])
+        stack.orientation = .horizontal
+        stack.spacing = 8
+        stack.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
+
+        material.translatesAutoresizingMaskIntoConstraints = false
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        searchBar.translatesAutoresizingMaskIntoConstraints = false
+        searchBar.addSubview(material)
+        searchBar.addSubview(stack)
+        contentView.addSubview(searchBar)
+
+        NSLayoutConstraint.activate([
+            material.topAnchor.constraint(equalTo: searchBar.topAnchor),
+            material.bottomAnchor.constraint(equalTo: searchBar.bottomAnchor),
+            material.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor),
+            material.trailingAnchor.constraint(equalTo: searchBar.trailingAnchor),
+
+            stack.topAnchor.constraint(equalTo: searchBar.topAnchor),
+            stack.bottomAnchor.constraint(equalTo: searchBar.bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: searchBar.trailingAnchor),
+
+            searchBar.topAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.topAnchor),
+            searchBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
+            searchBar.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
+            searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
+        ])
+    }
+
+    // MARK: Search actions
+
+    @objc private func showSearchBar() {
+        searchBar.isHidden = false
+        searchBarVisible = true
+        window?.makeFirstResponder(searchField)
+    }
+
+    @objc private func hideSearchBar() {
+        searchBar.isHidden = true
+        searchBarVisible = false
+        diffList.clearSearch()
+        searchResultLabel.stringValue = ""
+    }
+
+    @objc private func searchFieldAction() {
+        // Return pressed inside the field: advance to next match.
+        if NSApp.currentEvent?.modifierFlags.contains(.shift) == true {
+            diffList.previousMatch()
+        } else if !diffList.searchMatches.isEmpty {
+            diffList.nextMatch()
+        } else {
+            diffList.search(searchField.stringValue)
+        }
+    }
+
+    @objc private func searchScopeChanged() {
+        diffList.searchScope = searchScopeControl.selectedSegment == 1
+            ? .changedLinesOnly : .allLines
+    }
+
+    func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSSearchField) === searchField else { return }
+        let query = searchField.stringValue
+        if query.isEmpty {
+            diffList.clearSearch()
+            searchResultLabel.stringValue = ""
+        } else {
+            diffList.search(query)
+        }
+    }
+
+    // MARK: External editor
+
+    private func openFileInEditor(fileIndex: Int, line: Int?) {
+        guard let document = diffList.document,
+              document.files.indices.contains(fileIndex) else { return }
+        openInEditor(path: document.files[fileIndex].canonicalPath, line: line)
     }
 
     private func setupControls() {
@@ -144,22 +356,28 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         swapButton.controlSize = .small
         swapButton.bezelStyle = .rounded
 
+        commitPopup.target = self
+        commitPopup.action = #selector(commitSelectionChanged)
+        commitPopup.isEnabled = false
+
         stack.addArrangedSubview(labeledRow("base", basePopup))
         stack.addArrangedSubview(labeledRow("head", headPopup))
         stack.addArrangedSubview(swapButton)
         stack.addArrangedSubview(modePopup)
+        stack.addArrangedSubview(labeledRow("提交", commitPopup))
         stack.addArrangedSubview(labeledRow("显示", displayPopup))
         stack.addArrangedSubview(labeledRow("主题", themePopup))
         stack.addArrangedSubview(statusLabel)
 
         // Fixed widths so controls don't stretch with the window.
-        for control in [basePopup, headPopup, modePopup, displayPopup, themePopup] {
+        for control in [basePopup, headPopup, modePopup, displayPopup, themePopup, commitPopup] {
             control.translatesAutoresizingMaskIntoConstraints = false
         }
         NSLayoutConstraint.activate([
             basePopup.widthAnchor.constraint(equalToConstant: 160),
             headPopup.widthAnchor.constraint(equalToConstant: 160),
             modePopup.widthAnchor.constraint(equalToConstant: 150),
+            commitPopup.widthAnchor.constraint(equalToConstant: 160),
             displayPopup.widthAnchor.constraint(equalToConstant: 150),
             themePopup.widthAnchor.constraint(equalToConstant: 150),
         ])
@@ -226,9 +444,46 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
             self.refs = refs
             populateRefPopups(current: current)
             statusLabel.stringValue = "已加载 \(refs.count) 个引用"
+
+            // Watch the working tree: external edits (editor, AI tools,
+            // checkouts) auto-refresh the diff.
+            workspaceWatcher?.invalidate()
+            workspaceWatcher = WorkspaceWatcher(url: root) { [weak self] in
+                self?.refreshDiff()
+            }
+
             refreshDiff()
         } catch {
             showErrorAlert(error)
+        }
+    }
+
+    @objc private func commitSelectionChanged() {
+        let index = commitPopup.indexOfSelectedItem
+        if index <= 0 {
+            selectedCommitSHA = nil
+        } else if commits.indices.contains(index - 1) {
+            selectedCommitSHA = commits[index - 1].sha
+        }
+        refreshDiff()
+    }
+
+    private func reloadCommits(base: String, head: String) {
+        guard let repositoryURL else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            let commits = (try? await self.engine.commits(
+                in: repositoryURL, base: base, head: head
+            )) ?? []
+            self.commits = commits
+            self.selectedCommitSHA = nil
+            self.commitPopup.removeAllItems()
+            self.commitPopup.addItem(withTitle: "全部变更 (\(commits.count) 个提交)")
+            for commit in commits {
+                let title = "\(commit.shortSHA) \(commit.subject)"
+                self.commitPopup.addItem(withTitle: String(title.prefix(60)))
+            }
+            self.commitPopup.isEnabled = !commits.isEmpty
         }
     }
 
@@ -252,6 +507,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
     }
 
     @objc private func selectionChanged() {
+        selectedCommitSHA = nil
+        commitPopup.selectItem(at: 0)
         refreshDiff()
     }
 
@@ -282,20 +539,32 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate {
         else { return }
 
         let mode: ComparisonMode = modePopup.indexOfSelectedItem == 0 ? .threeDot : .twoDot
+        let commitSHA = selectedCommitSHA
 
         statusLabel.stringValue = "对比中…"
         diffTask?.cancel()
         diffTask = Task { [weak self] in
             guard let self else { return }
             do {
-                let document = try await self.engine.diff(
-                    in: repositoryURL, base: base, head: head, mode: mode
-                )
+                let document: DiffDocument
+                if let commitSHA {
+                    document = try await self.engine.commitDiff(
+                        in: repositoryURL, sha: commitSHA
+                    )
+                } else {
+                    document = try await self.engine.diff(
+                        in: repositoryURL, base: base, head: head, mode: mode
+                    )
+                }
                 guard !Task.isCancelled else { return }
                 self.diffList.document = document
                 self.sidebar.document = document
-                self.statusLabel.stringValue =
+                let prefix = commitSHA.map { _ in "[单个提交] " } ?? ""
+                self.statusLabel.stringValue = prefix +
                     "\(document.files.count) 个文件 · +\(document.totalAdditions) −\(document.totalDeletions)"
+                if commitSHA == nil {
+                    self.reloadCommits(base: base, head: head)
+                }
             } catch is CancellationError {
                 // Superseded by a newer request.
             } catch {

@@ -35,6 +35,25 @@ public enum ComparisonMode: Sendable, Hashable {
     case threeDot
 }
 
+/// A commit in the base..head range, for the commit timeline view.
+public struct GitCommit: Sendable, Identifiable, Equatable {
+    public let sha: String
+    public let shortSHA: String
+    public let author: String
+    public let dateISO8601: String
+    public let subject: String
+
+    public var id: String { sha }
+
+    public init(sha: String, shortSHA: String, author: String, dateISO8601: String, subject: String) {
+        self.sha = sha
+        self.shortSHA = shortSHA
+        self.author = author
+        self.dateISO8601 = dateISO8601
+        self.subject = subject
+    }
+}
+
 // MARK: - Engine protocol
 
 /// Abstraction over "where diffs come from". Implementations may shell out

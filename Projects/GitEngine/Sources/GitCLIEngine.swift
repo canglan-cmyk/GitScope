@@ -108,6 +108,66 @@ public struct GitCLIEngine: GitEngine {
         return document
     }
 
+    // MARK: - Commit timeline
+
+    /// Lists commits reachable from `head` but not `base` (the PR-style
+    /// "what this branch adds" sequence), oldest first — the author's
+    /// narrative order.
+    public func commits(
+        in repository: URL,
+        base: String,
+        head: String,
+        limit: Int = 200
+    ) async throws -> [GitCommit] {
+        let separator = "\u{1F}" // unit separator, never appears in messages
+        let format = ["%H", "%h", "%an", "%aI", "%s"].joined(separator: separator)
+        let output = try await run(
+            [
+                "log", "--reverse", "--no-merges",
+                "--max-count=\(limit)",
+                "--pretty=format:\(format)",
+                "\(base)..\(head)",
+            ],
+            workingDirectory: repository
+        )
+
+        var commits: [GitCommit] = []
+        for line in output.split(separator: "\n", omittingEmptySubsequences: true) {
+            let parts = line.components(separatedBy: separator)
+            guard parts.count == 5 else { continue }
+            commits.append(GitCommit(
+                sha: parts[0],
+                shortSHA: parts[1],
+                author: parts[2],
+                dateISO8601: parts[3],
+                subject: parts[4]
+            ))
+        }
+        return commits
+    }
+
+    /// Diff introduced by a single commit (against its first parent).
+    public func commitDiff(
+        in repository: URL,
+        sha: String
+    ) async throws -> DiffDocument {
+        let output = try await run(
+            [
+                "diff",
+                "--no-color",
+                "--no-ext-diff",
+                "--find-renames",
+                "\(sha)^!",
+            ],
+            workingDirectory: repository
+        )
+        var document = try UnifiedDiffParser().parse(output)
+        for index in document.files.indices {
+            IntralineHighlighter.annotate(file: &document.files[index])
+        }
+        return document
+    }
+
     // MARK: - Process runner
 
     /// Runs git with the given arguments and returns stdout as UTF-8 text.
