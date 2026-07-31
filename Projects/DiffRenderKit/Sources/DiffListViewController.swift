@@ -28,7 +28,131 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     private func rebuildRows() {
         rows = document.map { DiffTableRowBuilder.rows(for: $0, mode: displayMode) } ?? []
         selection = nil
+        if !searchQuery.isEmpty { recomputeSearchMatches() }
         tableView.reloadData()
+    }
+
+    // MARK: Search
+
+    public struct SearchMatch: Sendable {
+        public let row: Int
+        public let range: Range<Int> // UTF-16 offsets within the row text
+    }
+
+    public enum SearchScope: Sendable {
+        case allLines
+        case changedLinesOnly
+    }
+
+    public private(set) var searchMatches: [SearchMatch] = []
+    public private(set) var currentMatchIndex: Int = 0
+    public var searchScope: SearchScope = .allLines {
+        didSet { if !searchQuery.isEmpty { search(searchQuery) } }
+    }
+
+    private var searchQuery: String = ""
+
+    /// Called whenever matches change: (matchCount, currentIndex).
+    public var onSearchResultsChanged: ((Int, Int) -> Void)?
+
+    /// Runs a case-insensitive search across all diff line rows.
+    public func search(_ query: String) {
+        searchQuery = query
+        recomputeSearchMatches()
+        currentMatchIndex = 0
+        tableView.reloadData()
+        if !searchMatches.isEmpty {
+            revealMatch(at: 0)
+        }
+        onSearchResultsChanged?(searchMatches.count, searchMatches.isEmpty ? 0 : 1)
+    }
+
+    public func clearSearch() {
+        searchQuery = ""
+        searchMatches = []
+        currentMatchIndex = 0
+        tableView.reloadData()
+        onSearchResultsChanged?(0, 0)
+    }
+
+    public func nextMatch() {
+        guard !searchMatches.isEmpty else { return }
+        currentMatchIndex = (currentMatchIndex + 1) % searchMatches.count
+        revealMatch(at: currentMatchIndex)
+        onSearchResultsChanged?(searchMatches.count, currentMatchIndex + 1)
+    }
+
+    public func previousMatch() {
+        guard !searchMatches.isEmpty else { return }
+        currentMatchIndex = (currentMatchIndex - 1 + searchMatches.count) % searchMatches.count
+        revealMatch(at: currentMatchIndex)
+        onSearchResultsChanged?(searchMatches.count, currentMatchIndex + 1)
+    }
+
+    private func recomputeSearchMatches() {
+        searchMatches = []
+        guard let document, !searchQuery.isEmpty else { return }
+        let needle = searchQuery
+
+        for (rowIndex, row) in rows.enumerated() {
+            // Scope filtering: only diff-line rows are searchable.
+            var lineChange: LineChange?
+            switch row {
+            case .line(let f, let h, let l):
+                lineChange = document.files[f].hunks[h].lines[l].change
+            case .splitLine(let f, let h, let oldL, let newL):
+                let lines = document.files[f].hunks[h].lines
+                if let idx = newL ?? oldL { lineChange = lines[idx].change }
+            default:
+                continue
+            }
+            if searchScope == .changedLinesOnly, lineChange == .context { continue }
+
+            let text = text(forRow: rowIndex) as NSString
+            var searchRange = NSRange(location: 0, length: text.length)
+            while searchRange.length > 0 {
+                let found = text.range(
+                    of: needle, options: [.caseInsensitive], range: searchRange
+                )
+                guard found.location != NSNotFound else { break }
+                searchMatches.append(SearchMatch(
+                    row: rowIndex,
+                    range: found.location..<(found.location + found.length)
+                ))
+                let nextLocation = found.location + max(found.length, 1)
+                searchRange = NSRange(location: nextLocation, length: text.length - nextLocation)
+            }
+        }
+    }
+
+    private func revealMatch(at index: Int) {
+        guard searchMatches.indices.contains(index) else { return }
+        let match = searchMatches[index]
+        tableView.scrollRowToVisible(match.row)
+        applySearchToVisibleCells()
+    }
+
+    /// Search highlight ranges for a given row (current match emphasized).
+    func searchHighlights(forRow row: Int) -> (all: [Range<Int>], current: Range<Int>?) {
+        guard !searchMatches.isEmpty else { return ([], nil) }
+        let all = searchMatches.filter { $0.row == row }.map(\.range)
+        var current: Range<Int>?
+        if searchMatches.indices.contains(currentMatchIndex),
+           searchMatches[currentMatchIndex].row == row {
+            current = searchMatches[currentMatchIndex].range
+        }
+        return (all, current)
+    }
+
+    private func applySearchToVisibleCells() {
+        let visibleRows = tableView.rows(in: tableView.visibleRect)
+        for row in visibleRows.lowerBound..<visibleRows.upperBound {
+            guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false)
+                as? DiffRowCellView else { continue }
+            let highlights = searchHighlights(forRow: row)
+            cell.searchHighlights = highlights.all
+            cell.currentSearchHighlight = highlights.current
+        }
     }
 
     public var theme: DiffTheme = .default {
@@ -128,6 +252,9 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             inRow: row,
             textLength: cell.rowText.utf16.count
         )
+        let highlights = searchHighlights(forRow: row)
+        cell.searchHighlights = highlights.all
+        cell.currentSearchHighlight = highlights.current
         return cell
     }
 
@@ -274,6 +401,100 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         pasteboard.clearContents()
         pasteboard.setString(text, forType: .string)
     }
+
+    // MARK: Selection context (for reference finding / editor jump)
+
+    /// Information about where the current selection lives in the diff.
+    public struct SelectionContext: Sendable {
+        public let filePath: String
+        /// New-side line number of the selection start (nil for pure deletions).
+        public let lineNumber: Int?
+        public let selectedText: String
+    }
+
+    /// Resolves the current selection to file/line/text, or nil when nothing
+    /// meaningful is selected.
+    public func selectionContext() -> SelectionContext? {
+        guard let selection, !selection.isEmpty,
+              let document,
+              let text = selectedText(), !text.isEmpty else { return nil }
+
+        let row = selection.start.row
+        guard rows.indices.contains(row) else { return nil }
+
+        var fileIndex: Int?
+        var lineNumber: Int?
+        switch rows[row] {
+        case .line(let f, let h, let l):
+            fileIndex = f
+            let line = document.files[f].hunks[h].lines[l]
+            lineNumber = line.newLineNumber ?? line.oldLineNumber
+        case .splitLine(let f, let h, let oldL, let newL):
+            fileIndex = f
+            let lines = document.files[f].hunks[h].lines
+            if let idx = newL ?? oldL {
+                let line = lines[idx]
+                lineNumber = line.newLineNumber ?? line.oldLineNumber
+            }
+        case .fileHeader(let f), .hunkHeader(let f, _), .placeholder(let f, _):
+            fileIndex = f
+        }
+
+        guard let fileIndex, document.files.indices.contains(fileIndex) else { return nil }
+        return SelectionContext(
+            filePath: document.files[fileIndex].canonicalPath,
+            lineNumber: lineNumber,
+            selectedText: text
+        )
+    }
+
+    /// Context-menu callbacks installed by the app layer.
+    public var onFindReferences: ((SelectionContext) -> Void)?
+    public var onOpenSelectionInEditor: ((SelectionContext) -> Void)?
+
+    func makeContextMenu() -> NSMenu? {
+        let menu = NSMenu()
+
+        if selectedText() != nil {
+            let copyItem = NSMenuItem(title: "复制", action: #selector(DiffSelectionTableView.copy(_:)), keyEquivalent: "")
+            copyItem.target = tableView
+            menu.addItem(copyItem)
+        }
+
+        if let context = selectionContext() {
+            let word = context.selectedText
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            if !word.isEmpty, !word.contains("\n"), word.count <= 120,
+               onFindReferences != nil {
+                let title = word.count > 24
+                    ? "全仓库查找引用…"
+                    : "全仓库查找“\(word)”的引用"
+                let findItem = NSMenuItem(title: title, action: #selector(contextFindReferences), keyEquivalent: "")
+                findItem.target = self
+                menu.addItem(findItem)
+            }
+            if onOpenSelectionInEditor != nil {
+                let openItem = NSMenuItem(
+                    title: "在编辑器中打开\(context.lineNumber.map { "（第 \($0) 行）" } ?? "")",
+                    action: #selector(contextOpenInEditor), keyEquivalent: ""
+                )
+                openItem.target = self
+                menu.addItem(openItem)
+            }
+        }
+
+        return menu.items.isEmpty ? nil : menu
+    }
+
+    @objc private func contextFindReferences() {
+        guard let context = selectionContext() else { return }
+        onFindReferences?(context)
+    }
+
+    @objc private func contextOpenInEditor() {
+        guard let context = selectionContext() else { return }
+        onOpenSelectionInEditor?(context)
+    }
 }
 
 // MARK: - Selection-capable table view
@@ -351,5 +572,18 @@ final class DiffSelectionTableView: NSTableView {
 
     override func selectAll(_ sender: Any?) {
         selectionOwner?.selectAll()
+    }
+
+    override func menu(for event: NSEvent) -> NSMenu? {
+        // Right-click on an unselected spot: select the word under cursor
+        // first so "find references" has something to work with.
+        let point = convert(event.locationInWindow, from: nil)
+        if let owner = selectionOwner {
+            if owner.selectedText() == nil, let position = owner.position(at: point) {
+                owner.selectWord(at: position)
+            }
+            return owner.makeContextMenu()
+        }
+        return super.menu(for: event)
     }
 }

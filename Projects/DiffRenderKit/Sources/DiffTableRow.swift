@@ -96,6 +96,20 @@ public final class DiffRowCellView: DiffRenderView {
         }
     }
 
+    /// Search match ranges within this row's text (UTF-16 offsets).
+    public var searchHighlights: [Range<Int>] = [] {
+        didSet {
+            if searchHighlights != oldValue { needsDisplay = true }
+        }
+    }
+
+    /// The currently focused search match (drawn emphasized).
+    public var currentSearchHighlight: Range<Int>? {
+        didSet {
+            if currentSearchHighlight != oldValue { needsDisplay = true }
+        }
+    }
+
     /// The plain text this row contributes to a copy operation.
     public var rowText: String {
         switch content {
@@ -225,10 +239,12 @@ public final class DiffRowCellView: DiffRenderView {
         case .line(let line):
             drawDiffLine(line, palette: palette, baseline: baseline, in: context)
             drawGutterSeparators(palette: palette, in: context)
+            drawSearchHighlights(in: context)
             drawSelectionHighlight(palette: palette, in: context)
 
         case .splitLine(let old, let new):
             drawSplitLine(old: old, new: new, palette: palette, baseline: baseline, in: context)
+            drawSearchHighlights(in: context)
             drawSelectionHighlight(palette: palette, in: context)
 
         case .placeholder(let message):
@@ -422,6 +438,27 @@ public final class DiffRowCellView: DiffRenderView {
             width: round(endX) - round(startX),
             height: bounds.height
         ))
+    }
+
+    private func drawSearchHighlights(in context: CGContext) {
+        guard !searchHighlights.isEmpty else { return }
+        let line = makeCTLine(rowText)
+        for range in searchHighlights where !range.isEmpty {
+            let startX = CTLineGetOffsetForStringIndex(line, range.lowerBound, nil)
+            let endX = CTLineGetOffsetForStringIndex(line, range.upperBound, nil)
+            guard endX > startX else { continue }
+            let isCurrent = range == currentSearchHighlight
+            let color: NSColor = isCurrent
+                ? .systemOrange.withAlphaComponent(0.85)
+                : .systemYellow.withAlphaComponent(0.45)
+            color.setFill()
+            context.fill(NSRect(
+                x: textOriginX + startX,
+                y: isCurrent ? 1 : 2,
+                width: endX - startX,
+                height: bounds.height - (isCurrent ? 2 : 4)
+            ))
+        }
     }
 
     private func drawSelectionHighlight(palette: DiffPalette, in context: CGContext) {
