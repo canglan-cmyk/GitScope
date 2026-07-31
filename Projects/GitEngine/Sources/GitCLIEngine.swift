@@ -168,6 +168,49 @@ public struct GitCLIEngine: GitEngine {
         return document
     }
 
+    // MARK: - GitHub PR support
+
+    /// URL of the `origin` remote (or the first remote when origin is absent).
+    public func remoteURL(in repository: URL) async throws -> String? {
+        if let origin = try? await run(
+            ["remote", "get-url", "origin"], workingDirectory: repository
+        ) {
+            let trimmed = origin.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty { return trimmed }
+        }
+        let remotes = try await run(["remote"], workingDirectory: repository)
+        guard let first = remotes.split(separator: "\n").first else { return nil }
+        let url = try await run(
+            ["remote", "get-url", String(first)], workingDirectory: repository
+        )
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// Fetches a pull request head into a local ref
+    /// (`refs/gitscope/pr/{n}`) plus the PR's base branch, so the whole
+    /// diff can be computed locally — fast, offline-capable, and free of
+    /// the API's 300-file truncation.
+    ///
+    /// Returns the local ref names to diff: (base, head).
+    public func fetchPullRequest(
+        in repository: URL,
+        number: Int,
+        baseRef: String
+    ) async throws -> (base: String, head: String) {
+        let localPRRef = "refs/gitscope/pr/\(number)"
+        let localBaseRef = "refs/gitscope/pr-base/\(number)"
+        _ = try await run(
+            [
+                "fetch", "--no-tags", "origin",
+                "pull/\(number)/head:\(localPRRef)",
+                "+refs/heads/\(baseRef):\(localBaseRef)",
+            ],
+            workingDirectory: repository
+        )
+        return (base: localBaseRef, head: localPRRef)
+    }
+
     // MARK: - Process runner
 
     /// Runs git with the given arguments and returns stdout as UTF-8 text.

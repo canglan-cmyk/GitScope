@@ -202,11 +202,17 @@ final class FileTreeSidebarController: NSViewController,
     /// The controls stack the main controller installs its popups into.
     let controlsStack = NSStackView()
 
+    /// The pull-request browser hosted in the sidebar's PR tab.
+    let pullRequestPanel = PullRequestPanelController()
+
     private var treeRoots: [FileTreeNode] = []
     private let outlineView = NSOutlineView()
     private let scrollView = NSScrollView()
     private let filterField = NSSearchField()
     private let reviewedSummaryLabel = NSTextField(labelWithString: "")
+    private let tabControl = NSSegmentedControl(
+        labels: ["文件", "Pull Requests"], trackingMode: .selectOne, target: nil, action: nil
+    )
 
     private func rebuildTree() {
         treeRoots = document.map {
@@ -274,12 +280,22 @@ final class FileTreeSidebarController: NSViewController,
         let separator = NSBox()
         separator.boxType = .separator
 
+        tabControl.selectedSegment = 0
+        tabControl.target = self
+        tabControl.action = #selector(tabChanged)
+        tabControl.controlSize = .small
+        tabControl.segmentDistribution = .fillEqually
+
         let filterRow = NSStackView(views: [filterField, reviewedSummaryLabel])
         filterRow.orientation = .horizontal
         filterRow.spacing = 6
         filterRow.edgeInsets = NSEdgeInsets(top: 0, left: 12, bottom: 0, right: 12)
 
-        for view in [controlsStack, separator, filterRow, scrollView] {
+        addChild(pullRequestPanel)
+        let prView = pullRequestPanel.view
+        prView.isHidden = true
+
+        for view in [controlsStack, separator, tabControl, filterRow, scrollView, prView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
         }
@@ -292,7 +308,11 @@ final class FileTreeSidebarController: NSViewController,
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
-            filterRow.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            tabControl.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 8),
+            tabControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            tabControl.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+
+            filterRow.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 8),
             filterRow.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             filterRow.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
@@ -300,9 +320,28 @@ final class FileTreeSidebarController: NSViewController,
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
+
+            prView.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 8),
+            prView.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
+            prView.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
+            prView.bottomAnchor.constraint(equalTo: container.bottomAnchor),
         ])
 
         view = container
+    }
+
+    @objc private func tabChanged() {
+        let showPRs = tabControl.selectedSegment == 1
+        pullRequestPanel.view.isHidden = !showPRs
+        scrollView.isHidden = showPRs
+        filterField.isHidden = showPRs
+        reviewedSummaryLabel.isHidden = showPRs
+    }
+
+    /// Switches the sidebar back to the files tab (after a PR diff loads).
+    func showFilesTab() {
+        tabControl.selectedSegment = 0
+        tabChanged()
     }
 
     // MARK: Context menu
