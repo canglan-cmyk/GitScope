@@ -121,6 +121,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
             self?.searchResultLabel.stringValue = count == 0 ? "无结果" : "\(current)/\(count)"
         }
 
+        // PR browser: pick a PR → fetch its refs → local diff.
+        sidebar.pullRequestPanel.onSelectPullRequest = { [weak self] pr in
+            self?.showPullRequest(pr)
+        }
+
         // Right-click actions inside the diff.
         diffList.onFindReferences = { [weak self] context in
             self?.findReferences(for: context)
@@ -452,9 +457,56 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
                 self?.refreshDiff()
             }
 
+            // Point the PR browser at this repo's GitHub remote.
+            let remote = try? await engine.remoteURL(in: root)
+            sidebar.pullRequestPanel.setRepository(remoteURL: remote)
+
             refreshDiff()
         } catch {
             showErrorAlert(error)
+        }
+    }
+
+    // MARK: Pull request preview
+
+    /// Fetches the PR head + base into local refs and diffs them locally —
+    /// the full PR diff without opening a browser, and offline afterwards.
+    private func showPullRequest(_ pr: PullRequest) {
+        guard let repositoryURL else { return }
+        statusLabel.stringValue = "拉取 PR #\(pr.number)…"
+
+        diffTask?.cancel()
+        diffTask = Task { [weak self] in
+            guard let self else { return }
+            do {
+                let refs = try await self.engine.fetchPullRequest(
+                    in: repositoryURL, number: pr.number, baseRef: pr.baseRef
+                )
+                guard !Task.isCancelled else { return }
+
+                let document = try await self.engine.diff(
+                    in: repositoryURL,
+                    base: refs.base,
+                    head: refs.head,
+                    mode: .threeDot
+                )
+                guard !Task.isCancelled else { return }
+
+                self.selectedCommitSHA = nil
+                self.diffList.document = document
+                self.sidebar.document = document
+                self.sidebar.showFilesTab()
+                self.statusLabel.stringValue =
+                    "PR #\(pr.number) \(pr.title.prefix(30)) · \(document.files.count) 个文件 · +\(document.totalAdditions) −\(document.totalDeletions)"
+                self.window?.title = "GitScope — PR #\(pr.number) \(pr.title)"
+
+                // Populate the commit timeline for the PR range too.
+                self.reloadCommits(base: refs.base, head: refs.head)
+            } catch is CancellationError {
+            } catch {
+                self.statusLabel.stringValue = "PR 拉取失败"
+                self.showErrorAlert(error)
+            }
         }
     }
 
