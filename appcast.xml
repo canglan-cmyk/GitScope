@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+  <channel>
+    <title>GitScope</title>
+    <item>
+      <title>GitScope 0.3.0</title>
+      <pubDate>Fri, 31 Jul 2026 07:24:12 +0000</pubDate>
+      <sparkle:version>0.3.0</sparkle:version>
+      <sparkle:shortVersionString>0.3.0</sparkle:shortVersionString>
+      <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+      <link>https://github.com/canglan-cmyk/GitScope/releases</link>
+      <sparkle:releaseNotesLink>https://github.com/canglan-cmyk/GitScope/releases/tag/v0.3.0</sparkle:releaseNotesLink>
+      <enclosure
+        url="https://github.com/canglan-cmyk/GitScope/releases/download/v0.3.0/GitScope-0.3.0.dmg"
+        sparkle:edSignature="8k7csmzv/oT134XXnUpPGvF0CVCC4oNU/HamWtFHvv3J1yyx8NH6ISuC/LpITnP1wEhmm8LvLTzHBK2hymS1BA=="
+        length="3519005"
+        type="application/octet-stream" />
+    </item>
+  </channel>
+</rss>
