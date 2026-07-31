@@ -39,6 +39,15 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     private var selectedCommitSHA: String? // nil = whole-range diff
     private let commitPopup = NSPopUpButton(frame: .zero, pullsDown: false)
 
+    // PR preview mode. When non-nil, the diff shows a fetched pull request
+    // and the branch pickers are hidden to avoid two conflicting sources of
+    // truth in the sidebar.
+    private var activePullRequest: (pr: PullRequest, base: String, head: String)?
+    private let prBanner = NSStackView()
+    private let prTitleLabel = NSTextField(labelWithString: "")
+    private let prRefsLabel = NSTextField(labelWithString: "")
+    private var branchControlRows: [NSView] = []
+
     // Search bar (hidden until ⌘F)
     private let searchBar = NSView()
     private let searchField = NSSearchField()
@@ -365,14 +374,47 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         commitPopup.action = #selector(commitSelectionChanged)
         commitPopup.isEnabled = false
 
-        stack.addArrangedSubview(labeledRow("base", basePopup))
-        stack.addArrangedSubview(labeledRow("head", headPopup))
+        // PR mode banner (hidden until a PR is opened): shows what is being
+        // previewed and offers a way back to branch comparison.
+        prTitleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        prTitleLabel.lineBreakMode = .byTruncatingTail
+        prTitleLabel.maximumNumberOfLines = 2
+        prRefsLabel.font = .monospacedSystemFont(ofSize: 10, weight: .regular)
+        prRefsLabel.textColor = .secondaryLabelColor
+        prRefsLabel.lineBreakMode = .byTruncatingMiddle
+        let exitPRButton = NSButton(
+            title: "← 返回分支对比", target: self, action: #selector(exitPullRequestMode)
+        )
+        exitPRButton.controlSize = .small
+        exitPRButton.bezelStyle = .rounded
+
+        prBanner.orientation = .vertical
+        prBanner.alignment = .leading
+        prBanner.spacing = 4
+        prBanner.addArrangedSubview(prTitleLabel)
+        prBanner.addArrangedSubview(prRefsLabel)
+        prBanner.addArrangedSubview(exitPRButton)
+        prBanner.isHidden = true
+
+        let baseRow = labeledRow("base", basePopup)
+        let headRow = labeledRow("head", headPopup)
+        branchControlRows = [baseRow, headRow, swapButton, modePopup]
+
+        stack.addArrangedSubview(prBanner)
+        stack.addArrangedSubview(baseRow)
+        stack.addArrangedSubview(headRow)
         stack.addArrangedSubview(swapButton)
         stack.addArrangedSubview(modePopup)
         stack.addArrangedSubview(labeledRow("提交", commitPopup))
         stack.addArrangedSubview(labeledRow("显示", displayPopup))
         stack.addArrangedSubview(labeledRow("主题", themePopup))
         stack.addArrangedSubview(statusLabel)
+
+        prBanner.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            prTitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+            prRefsLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
+        ])
 
         // Fixed widths so controls don't stretch with the window.
         for control in [basePopup, headPopup, modePopup, displayPopup, themePopup, commitPopup] {
@@ -445,6 +487,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
             let refs = try await engine.refs(in: root)
             let current = try await engine.currentBranch(in: root)
 
+            // A fresh repository always starts in branch-comparison mode.
+            activePullRequest = nil
+            prBanner.isHidden = true
+            branchControlRows.forEach { $0.isHidden = false }
+
             self.repositoryURL = root
             self.refs = refs
             populateRefPopups(current: current)
@@ -492,12 +539,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
                 )
                 guard !Task.isCancelled else { return }
 
+                self.enterPullRequestMode(pr: pr, base: refs.base, head: refs.head)
                 self.selectedCommitSHA = nil
                 self.diffList.document = document
                 self.sidebar.document = document
                 self.sidebar.showFilesTab()
                 self.statusLabel.stringValue =
-                    "PR #\(pr.number) \(pr.title.prefix(30)) · \(document.files.count) 个文件 · +\(document.totalAdditions) −\(document.totalDeletions)"
+                    "\(document.files.count) 个文件 · +\(document.totalAdditions) −\(document.totalDeletions)"
                 self.window?.title = "GitScope — PR #\(pr.number) \(pr.title)"
 
                 // Populate the commit timeline for the PR range too.
@@ -508,6 +556,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
                 self.showErrorAlert(error)
             }
         }
+    }
+
+    /// Switches the sidebar into PR mode: banner on, branch pickers off —
+    /// one source of truth for what the diff shows.
+    private func enterPullRequestMode(pr: PullRequest, base: String, head: String) {
+        activePullRequest = (pr, base, head)
+        prTitleLabel.stringValue = "PR #\(pr.number) \(pr.title)"
+        prRefsLabel.stringValue = "\(pr.headRef) → \(pr.baseRef)"
+        prBanner.isHidden = false
+        branchControlRows.forEach { $0.isHidden = true }
+    }
+
+    @objc private func exitPullRequestMode() {
+        activePullRequest = nil
+        prBanner.isHidden = true
+        branchControlRows.forEach { $0.isHidden = false }
+        updateWindowTitle()
+        selectedCommitSHA = nil
+        refreshDiff()
     }
 
     @objc private func commitSelectionChanged() {
@@ -585,12 +652,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     // MARK: Diff loading
 
     private func refreshDiff() {
-        guard let repositoryURL,
-              let base = basePopup.titleOfSelectedItem,
-              let head = headPopup.titleOfSelectedItem
-        else { return }
+        guard let repositoryURL else { return }
 
-        let mode: ComparisonMode = modePopup.indexOfSelectedItem == 0 ? .threeDot : .twoDot
+        // In PR mode the comparison is pinned to the fetched PR refs; in
+        // branch mode it follows the pickers.
+        let base: String
+        let head: String
+        let mode: ComparisonMode
+        if let active = activePullRequest {
+            base = active.base
+            head = active.head
+            mode = .threeDot
+        } else {
+            guard let pickedBase = basePopup.titleOfSelectedItem,
+                  let pickedHead = headPopup.titleOfSelectedItem
+            else { return }
+            base = pickedBase
+            head = pickedHead
+            mode = modePopup.indexOfSelectedItem == 0 ? .threeDot : .twoDot
+        }
         let commitSHA = selectedCommitSHA
 
         statusLabel.stringValue = "对比中…"
