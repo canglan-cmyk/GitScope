@@ -5,6 +5,26 @@ import AppKit
 @MainActor
 public final class ImagePreviewCellView: NSTableCellView {
 
+    public enum ChangeType {
+        case added, deleted, modified
+
+        var color: NSColor {
+            switch self {
+            case .added: return NSColor.systemGreen
+            case .deleted: return NSColor.systemRed
+            case .modified: return NSColor.systemOrange
+            }
+        }
+
+        var backgroundColor: NSColor {
+            switch self {
+            case .added: return NSColor.systemGreen.withAlphaComponent(0.06)
+            case .deleted: return NSColor.systemRed.withAlphaComponent(0.06)
+            case .modified: return NSColor.systemOrange.withAlphaComponent(0.06)
+            }
+        }
+    }
+
     public static let reuseIdentifier = NSUserInterfaceItemIdentifier("ImagePreviewCell")
 
     /// The image to display (new version for additions, old for deletions).
@@ -113,12 +133,28 @@ public final class ImagePreviewCellView: NSTableCellView {
     }
 
     /// Configure for a single image (addition or deletion).
-    public func configureSingle(image: NSImage?, status: String) {
+    public func configureSingle(image: NSImage?, status: String, changeType: ChangeType = .modified) {
         self.image = image
         self.oldImage = nil
-        self.statusText = status
         oldImageLayer.isHidden = true
         imageLayer.isHidden = false
+
+        // Status badge with color.
+        let badge = NSMutableAttributedString()
+        let dot = NSAttributedString(
+            string: "● ",
+            attributes: [.foregroundColor: changeType.color, .font: NSFont.systemFont(ofSize: 12)]
+        )
+        badge.append(dot)
+        badge.append(NSAttributedString(
+            string: status,
+            attributes: [.foregroundColor: changeType.color, .font: NSFont.systemFont(ofSize: 11, weight: .semibold)]
+        ))
+        statusLabel.attributedStringValue = badge
+
+        // Background tint.
+        wantsLayer = true
+        layer?.backgroundColor = changeType.backgroundColor.cgColor
 
         // Center the image.
         imageLayer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 16).isActive = true

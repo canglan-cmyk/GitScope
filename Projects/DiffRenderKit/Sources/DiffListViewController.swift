@@ -379,12 +379,25 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
                 tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
             }
             let status: String
+            let changeType: ImagePreviewCellView.ChangeType
             switch file.change {
-            case .added: status = "新增图片"
-            case .deleted: status = "删除图片"
-            default: status = "图片"
+            case .added:
+                status = "新增"
+                changeType = .added
+            case .deleted:
+                status = "删除"
+                changeType = .deleted
+            case .modified:
+                status = "修改"
+                changeType = .modified
+            case .renamed:
+                status = "重命名"
+                changeType = .modified
+            default:
+                status = "图片"
+                changeType = .modified
             }
-            imgCell.configureSingle(image: img, status: status)
+            imgCell.configureSingle(image: img, status: status, changeType: changeType)
             return imgCell
         }
 
