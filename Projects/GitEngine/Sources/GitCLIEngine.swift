@@ -82,7 +82,8 @@ public struct GitCLIEngine: GitEngine {
         in repository: URL,
         base: String,
         head: String,
-        mode: ComparisonMode
+        mode: ComparisonMode,
+        contextLines: Int = 3
     ) async throws -> DiffDocument {
         let range: String
         switch mode {
@@ -96,6 +97,7 @@ public struct GitCLIEngine: GitEngine {
                 "--no-color",
                 "--no-ext-diff",
                 "--find-renames",
+                "-U\(contextLines)",
                 range,
             ],
             workingDirectory: repository

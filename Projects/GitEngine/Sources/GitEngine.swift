@@ -70,8 +70,21 @@ public protocol GitEngine: Sendable {
         in repository: URL,
         base: String,
         head: String,
-        mode: ComparisonMode
+        mode: ComparisonMode,
+        contextLines: Int
     ) async throws -> DiffDocument
+}
+
+extension GitEngine {
+    /// Default: 3 context lines (git default).
+    public func diff(
+        in repository: URL,
+        base: String,
+        head: String,
+        mode: ComparisonMode
+    ) async throws -> DiffDocument {
+        try await diff(in: repository, base: base, head: head, mode: mode, contextLines: 3)
+    }
 }
 
 // MARK: - Errors

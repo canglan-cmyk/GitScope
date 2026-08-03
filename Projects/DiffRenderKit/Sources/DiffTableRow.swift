@@ -18,6 +18,8 @@ public enum DiffTableRow: Sendable {
     case splitLine(fileIndex: Int, hunkIndex: Int, oldLineIndex: Int?, newLineIndex: Int?)
     /// Placeholder for binary or empty files.
     case placeholder(fileIndex: Int, message: String)
+    /// Clickable row to expand context around hunks.
+    case expandContext(fileIndex: Int)
 }
 
 /// How diff content is presented.
@@ -30,11 +32,14 @@ public enum DiffDisplayMode: Sendable, Equatable {
 public enum DiffTableRowBuilder {
     public static func rows(
         for document: DiffDocument,
-        mode: DiffDisplayMode = .unified
+        mode: DiffDisplayMode = .unified,
+        collapsedFiles: Set<Int> = []
     ) -> [DiffTableRow] {
         var rows: [DiffTableRow] = []
         for (fileIndex, file) in document.files.enumerated() {
             rows.append(.fileHeader(fileIndex: fileIndex))
+            // Skip content rows for collapsed (reviewed) files.
+            if collapsedFiles.contains(fileIndex) { continue }
             if file.isBinary {
                 rows.append(.placeholder(fileIndex: fileIndex, message: "二进制文件"))
                 continue
@@ -44,6 +49,10 @@ public enum DiffTableRowBuilder {
                 continue
             }
             for (hunkIndex, hunk) in file.hunks.enumerated() {
+                // Add expand-context row between hunks (gap indicator).
+                if hunkIndex > 0 {
+                    rows.append(.expandContext(fileIndex: fileIndex))
+                }
                 rows.append(.hunkHeader(fileIndex: fileIndex, hunkIndex: hunkIndex))
                 switch mode {
                 case .unified:
@@ -85,6 +94,7 @@ public final class DiffRowCellView: DiffRenderView {
         case line(DiffLine)
         case splitLine(old: DiffLine?, new: DiffLine?)
         case placeholder(String)
+        case expandContext
     }
 
     private var content: Content = .none
@@ -117,6 +127,13 @@ public final class DiffRowCellView: DiffRenderView {
 
     /// The file index for the current file header (used by the review callback).
     public var fileIndex: Int = -1
+
+    /// Whether this file header is in collapsed state (content hidden).
+    public var isCollapsed: Bool = false {
+        didSet {
+            if isCollapsed != oldValue { needsDisplay = true }
+        }
+    }
 
     private lazy var reviewButton: NSButton = {
         let btn = NSButton(
@@ -174,6 +191,7 @@ public final class DiffRowCellView: DiffRenderView {
         case .line(let line): return line.content
         case .splitLine(let old, let new): return (new ?? old)?.content ?? ""
         case .placeholder(let message): return message
+        case .expandContext: return ""
         }
     }
 
@@ -213,10 +231,14 @@ public final class DiffRowCellView: DiffRenderView {
 
     // MARK: Configure
 
+    /// The syntax language for the current file (used for highlighting).
+    private var syntaxLanguage: SyntaxHighlighter.Language = .unknown
+
     public func configure(row: DiffTableRow, document: DiffDocument, theme: DiffTheme) {
         self.theme = theme
         switch row {
         case .fileHeader(let fileIndex):
+            syntaxLanguage = SyntaxHighlighter.language(forPath: document.files[fileIndex].canonicalPath)
             let file = document.files[fileIndex]
             let title: String
             if case .renamed = file.change {
@@ -229,10 +251,13 @@ public final class DiffRowCellView: DiffRenderView {
                 stats: "+\(file.additionCount) −\(file.deletionCount)"
             )
         case .hunkHeader(let fileIndex, let hunkIndex):
+            syntaxLanguage = SyntaxHighlighter.language(forPath: document.files[fileIndex].canonicalPath)
             content = .hunkHeader(text: document.files[fileIndex].hunks[hunkIndex].headerText)
         case .line(let fileIndex, let hunkIndex, let lineIndex):
+            syntaxLanguage = SyntaxHighlighter.language(forPath: document.files[fileIndex].canonicalPath)
             content = .line(document.files[fileIndex].hunks[hunkIndex].lines[lineIndex])
         case .splitLine(let fileIndex, let hunkIndex, let oldLineIndex, let newLineIndex):
+            syntaxLanguage = SyntaxHighlighter.language(forPath: document.files[fileIndex].canonicalPath)
             let lines = document.files[fileIndex].hunks[hunkIndex].lines
             content = .splitLine(
                 old: oldLineIndex.map { lines[$0] },
@@ -240,6 +265,8 @@ public final class DiffRowCellView: DiffRenderView {
             )
         case .placeholder(_, let message):
             content = .placeholder(message)
+        case .expandContext:
+            content = .expandContext
         }
         needsDisplay = true
     }
@@ -262,13 +289,38 @@ public final class DiffRowCellView: DiffRenderView {
             break
 
         case .fileHeader(let title, let stats):
-            palette.hunkHeaderBackground.nsColor.setFill()
+            // Dimmer background for collapsed (reviewed) files.
+            if isCollapsed {
+                palette.hunkHeaderBackground.nsColor.withAlphaComponent(0.5).setFill()
+            } else {
+                palette.hunkHeaderBackground.nsColor.setFill()
+            }
             context.fill(bounds)
             palette.gutterLine.nsColor.setFill()
             context.fill(NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1))
 
+            // Collapse indicator: ▶ (collapsed) or ▼ (expanded).
+            let indicator = isCollapsed ? "▶" : "▼"
+            let indicatorLine = makeCTLine(indicator)
+            draw(line: indicatorLine, at: 4, baseline: bounds.height - 11, in: context, color: palette.secondaryText.nsColor)
+
             let titleLine = makeCTLine(title, bold: true)
-            draw(line: titleLine, at: 12, baseline: bounds.height - 11, in: context, color: palette.text.nsColor)
+            let titleColor = isCollapsed ? palette.secondaryText.nsColor : palette.text.nsColor
+            draw(line: titleLine, at: 18, baseline: bounds.height - 11, in: context, color: titleColor)
+
+            // "已看" label for collapsed files.
+            if isCollapsed {
+                let badge = makeCTLine("✓ 已看")
+                let badgeWidth = CTLineGetTypographicBounds(badge, nil, nil, nil)
+                draw(
+                    line: badge,
+                    at: bounds.width - CGFloat(badgeWidth) - 40,
+                    baseline: bounds.height - 11,
+                    in: context,
+                    color: NSColor.systemGreen
+                )
+            }
+
             let statsLine = makeCTLine(stats)
             let statsWidth = CTLineGetTypographicBounds(statsLine, nil, nil, nil)
             draw(
@@ -310,6 +362,22 @@ public final class DiffRowCellView: DiffRenderView {
                 in: context,
                 color: palette.secondaryText.nsColor
             )
+
+        case .expandContext:
+            // Draw a centered "⋯ 展开更多上下文" clickable row.
+            palette.hunkHeaderBackground.nsColor.withAlphaComponent(0.3).setFill()
+            context.fill(bounds)
+            let text = "⋯ 展开更多上下文"
+            let ctLine = makeCTLine(text)
+            let lineWidth = CTLineGetTypographicBounds(ctLine, nil, nil, nil)
+            let centerX = (bounds.width - CGFloat(lineWidth)) / 2
+            draw(
+                line: ctLine,
+                at: centerX,
+                baseline: bounds.height / 2 + 4,
+                in: context,
+                color: NSColor.controlAccentColor
+            )
         }
     }
 
@@ -331,7 +399,21 @@ public final class DiffRowCellView: DiffRenderView {
             break
         }
 
-        let contentLine = makeCTLine(line.content)
+        // Syntax-highlighted content line (falls back to plain if unknown language).
+        let isDark = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua
+        let highlighted = SyntaxHighlighter.highlight(
+            line.content,
+            language: syntaxLanguage,
+            font: font,
+            baseColor: palette.text.nsColor,
+            isDark: isDark
+        )
+        let contentLine: CTLine
+        if let highlighted {
+            contentLine = CTLineCreateWithAttributedString(highlighted)
+        } else {
+            contentLine = makeCTLine(line.content)
+        }
 
         // 2. Intra-line emphasis.
         if let highlight = line.intralineHighlight, line.change != .context {
@@ -371,8 +453,17 @@ public final class DiffRowCellView: DiffRenderView {
             break
         }
 
-        // 5. Content.
-        draw(line: contentLine, at: contentStartX, baseline: baseline, in: context, color: palette.text.nsColor)
+        // 5. Content (syntax-highlighted lines draw their own colors).
+        if highlighted != nil {
+            // Highlighted line has per-character colors; draw without overriding.
+            context.saveGState()
+            context.textMatrix = CGAffineTransform(scaleX: 1, y: -1)
+            context.textPosition = CGPoint(x: contentStartX, y: baseline)
+            CTLineDraw(contentLine, context)
+            context.restoreGState()
+        } else {
+            draw(line: contentLine, at: contentStartX, baseline: baseline, in: context, color: palette.text.nsColor)
+        }
     }
 
     private func drawSplitLine(

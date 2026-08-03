@@ -155,7 +155,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         diffList.onToggleFileReview = { [weak self] fileIndex in
             guard let self else { return }
             self.sidebar.toggleReviewed(fileIndex: fileIndex)
-            self.diffList.reloadTable()
+            // Auto-collapse reviewed files, expand when un-reviewed.
+            let isNowReviewed = self.sidebar.isReviewed(fileIndex: fileIndex)
+            if isNowReviewed {
+                self.diffList.collapseFile(at: fileIndex)
+            } else {
+                self.diffList.expandFile(at: fileIndex)
+            }
         }
 
         // PR browser: pick a PR → fetch its refs → local diff.
@@ -169,6 +175,13 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         }
         diffList.onOpenSelectionInEditor = { [weak self] context in
             self?.openInEditor(path: context.filePath, line: context.lineNumber)
+        }
+
+        // Expand context: increase context lines and re-diff.
+        diffList.onExpandContext = { [weak self] in
+            guard let self else { return }
+            self.contextLines = min(self.contextLines + 10, 999)
+            self.refreshDiff()
         }
 
         // ⌘F anywhere in the window opens the search bar. Key events don't
@@ -628,6 +641,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
     // MARK: Diff loading
 
+    /// Current number of context lines for the diff.
+    private var contextLines: Int = 3
+
     private func refreshDiff() {
         guard let repositoryURL else { return }
 
@@ -662,7 +678,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
                     )
                 } else {
                     document = try await self.engine.diff(
-                        in: repositoryURL, base: base, head: head, mode: mode
+                        in: repositoryURL, base: base, head: head, mode: mode,
+                        contextLines: self.contextLines
                     )
                 }
                 guard !Task.isCancelled else { return }

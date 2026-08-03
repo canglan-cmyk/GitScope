@@ -28,6 +28,34 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     /// Called when the user clicks the review button on a file header.
     public var onToggleFileReview: ((Int) -> Void)?
 
+    /// Called when the user clicks an "expand context" row. Passes the file index.
+    public var onExpandContext: (() -> Void)?
+
+    /// Files that are collapsed (only header shown, content hidden).
+    public private(set) var collapsedFiles: Set<Int> = []
+
+    /// Collapse a file (hide its diff content, show only header).
+    public func collapseFile(at fileIndex: Int) {
+        collapsedFiles.insert(fileIndex)
+        rebuildRows()
+    }
+
+    /// Expand a previously collapsed file.
+    public func expandFile(at fileIndex: Int) {
+        collapsedFiles.remove(fileIndex)
+        rebuildRows()
+    }
+
+    /// Toggle collapse state for a file.
+    public func toggleCollapse(at fileIndex: Int) {
+        if collapsedFiles.contains(fileIndex) {
+            collapsedFiles.remove(fileIndex)
+        } else {
+            collapsedFiles.insert(fileIndex)
+        }
+        rebuildRows()
+    }
+
     /// Unified (stacked) or split (side-by-side) presentation.
     public var displayMode: DiffDisplayMode = .unified {
         didSet {
@@ -40,7 +68,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
 
     private func rebuildRows() {
         isRebuilding = true
-        rows = document.map { DiffTableRowBuilder.rows(for: $0, mode: displayMode) } ?? []
+        rows = document.map { DiffTableRowBuilder.rows(for: $0, mode: displayMode, collapsedFiles: collapsedFiles) } ?? []
         selection = nil
         if !searchQuery.isEmpty { recomputeSearchMatches() }
         tableView.reloadData()
@@ -285,6 +313,8 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             return fileHeaderRowHeight
         case .placeholder:
             return fileHeaderRowHeight
+        case .expandContext:
+            return 24
         case .hunkHeader, .line, .splitLine:
             return metricsView.rowHeight
         }
@@ -320,12 +350,14 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             cell.fileIndex = fileIndex
             cell.showsReviewButton = showsReviewButtons
             cell.isReviewed = isFileReviewed?(fileIndex) ?? false
+            cell.isCollapsed = collapsedFiles.contains(fileIndex)
             cell.onToggleReview = { [weak self] idx in
                 self?.onToggleFileReview?(idx)
             }
         } else {
             cell.showsReviewButton = false
             cell.onToggleReview = nil
+            cell.isCollapsed = false
         }
 
         return cell
@@ -377,6 +409,8 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             return preferred.map { lines[$0].content } ?? ""
         case .placeholder(_, let message):
             return message
+        case .expandContext:
+            return ""
         }
     }
 
@@ -449,6 +483,13 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         )
     }
 
+    /// Returns true if the given row is an expandContext row.
+    func isExpandContextRow(at row: Int) -> Bool {
+        guard rows.indices.contains(row) else { return false }
+        if case .expandContext = rows[row] { return true }
+        return false
+    }
+
     func clearSelection() {
         selection = nil
     }
@@ -510,7 +551,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
                 let line = lines[idx]
                 lineNumber = line.newLineNumber ?? line.oldLineNumber
             }
-        case .fileHeader(let f), .hunkHeader(let f, _), .placeholder(let f, _):
+        case .fileHeader(let f), .hunkHeader(let f, _), .placeholder(let f, _), .expandContext(let f):
             fileIndex = f
         }
 
@@ -592,6 +633,16 @@ final class DiffSelectionTableView: NSTableView {
     override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(self)
         let point = convert(event.locationInWindow, from: nil)
+
+        // Check if clicking an expand-context row.
+        let clickedRow = row(at: point)
+        if clickedRow >= 0, let owner = selectionOwner {
+            if owner.isExpandContextRow(at: clickedRow) {
+                owner.onExpandContext?()
+                return
+            }
+        }
+
         guard let owner = selectionOwner, let position = owner.position(at: point) else {
             selectionOwner?.clearSelection()
             return
