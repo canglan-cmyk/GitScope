@@ -640,7 +640,17 @@ final class DiffSelectionTableView: NSTableView {
     override var acceptsFirstResponder: Bool { true }
 
     override func resetCursorRects() {
+        // Default iBeam for text content.
         addCursorRect(visibleRect, cursor: .iBeam)
+        // Pointing hand for clickable rows (file headers, expand context).
+        guard let owner = selectionOwner else { return }
+        let visibleRows = rows(in: visibleRect)
+        for row in visibleRows.lowerBound..<visibleRows.upperBound {
+            if owner.isFileHeaderRow(at: row) || owner.isExpandContextRow(at: row) {
+                let rowRect = rect(ofRow: row)
+                addCursorRect(rowRect, cursor: .pointingHand)
+            }
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -654,8 +664,8 @@ final class DiffSelectionTableView: NSTableView {
                 owner.onExpandContext?()
                 return
             }
-            // Click on file header triangle area (left 20px) toggles collapse.
-            if owner.isFileHeaderRow(at: clickedRow) && point.x < 20 {
+            // Click anywhere on file header row toggles collapse.
+            if owner.isFileHeaderRow(at: clickedRow) {
                 owner.toggleCollapse(at: owner.fileIndex(forRow: clickedRow))
                 return
             }
