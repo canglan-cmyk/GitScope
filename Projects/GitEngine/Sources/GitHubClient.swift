@@ -282,6 +282,97 @@ public final class GitHubClient: Sendable {
         return login
     }
 
+    // MARK: PR Review Comments
+
+    /// Fetches all review comments on a pull request.
+    public func reviewComments(slug: String, prNumber: Int) async throws -> [PRReviewComment] {
+        guard let token = storedToken else { throw GitHubClientError.notAuthenticated }
+        var allComments: [PRReviewComment] = []
+        var page = 1
+        while true {
+            var components = URLComponents(
+                string: "https://api.github.com/repos/\(slug)/pulls/\(prNumber)/comments"
+            )!
+            components.queryItems = [
+                URLQueryItem(name: "per_page", value: "100"),
+                URLQueryItem(name: "page", value: String(page)),
+            ]
+            var request = URLRequest(url: components.url!)
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+            request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+            let (data, response) = try await session.data(for: request)
+            try Self.ensureOK(response, data: data)
+            guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+            else { throw GitHubClientError.invalidResponse }
+            if array.isEmpty { break }
+            for item in array {
+                guard let id = item["id"] as? Int,
+                      let body = item["body"] as? String,
+                      let path = item["path"] as? String,
+                      let user = (item["user"] as? [String: Any])?["login"] as? String
+                else { continue }
+                let line = item["line"] as? Int ?? item["original_line"] as? Int
+                let side = item["side"] as? String ?? "RIGHT"
+                let createdAt = item["created_at"] as? String ?? ""
+                let avatarURL = (item["user"] as? [String: Any])?["avatar_url"] as? String
+                let inReplyTo = item["in_reply_to_id"] as? Int
+                allComments.append(PRReviewComment(
+                    id: id,
+                    body: body,
+                    path: path,
+                    line: line,
+                    side: side == "LEFT" ? .left : .right,
+                    author: user,
+                    avatarURL: avatarURL,
+                    createdAt: createdAt,
+                    inReplyToId: inReplyTo
+                ))
+            }
+            if array.count < 100 { break }
+            page += 1
+        }
+        return allComments
+    }
+
+    /// Fetches issue-level (non-inline) comments on a PR.
+    public func issueComments(slug: String, prNumber: Int) async throws -> [PRReviewComment] {
+        guard let token = storedToken else { throw GitHubClientError.notAuthenticated }
+        var components = URLComponents(
+            string: "https://api.github.com/repos/\(slug)/issues/\(prNumber)/comments"
+        )!
+        components.queryItems = [
+            URLQueryItem(name: "per_page", value: "100"),
+        ]
+        var request = URLRequest(url: components.url!)
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
+        let (data, response) = try await session.data(for: request)
+        try Self.ensureOK(response, data: data)
+        guard let array = try JSONSerialization.jsonObject(with: data) as? [[String: Any]]
+        else { throw GitHubClientError.invalidResponse }
+        return array.compactMap { item in
+            guard let id = item["id"] as? Int,
+                  let body = item["body"] as? String,
+                  let user = (item["user"] as? [String: Any])?["login"] as? String
+            else { return nil }
+            let createdAt = item["created_at"] as? String ?? ""
+            let avatarURL = (item["user"] as? [String: Any])?["avatar_url"] as? String
+            return PRReviewComment(
+                id: id,
+                body: body,
+                path: "",
+                line: nil,
+                side: .right,
+                author: user,
+                avatarURL: avatarURL,
+                createdAt: createdAt,
+                inReplyToId: nil
+            )
+        }
+    }
+
     private static func ensureOK(_ response: URLResponse, data: Data) throws {
         guard let http = response as? HTTPURLResponse else {
             throw GitHubClientError.invalidResponse
@@ -293,4 +384,30 @@ public final class GitHubClient: Sendable {
             )
         }
     }
+}
+
+// MARK: - PR Review Comment Model
+
+/// A review comment on a pull request (inline or issue-level).
+public struct PRReviewComment: Sendable, Identifiable, Equatable {
+    public let id: Int
+    public let body: String
+    /// File path the comment is attached to (empty for issue-level comments).
+    public let path: String
+    /// Line number in the diff (nil for file-level or issue-level comments).
+    public let line: Int?
+    /// Which side of the diff the comment is on.
+    public let side: Side
+    public let author: String
+    public let avatarURL: String?
+    public let createdAt: String
+    /// If this comment is a reply in a thread.
+    public let inReplyToId: Int?
+
+    public enum Side: Sendable, Equatable {
+        case left, right
+    }
+
+    /// Whether this is an inline (file-attached) comment.
+    public var isInline: Bool { !path.isEmpty && line != nil }
 }

@@ -50,7 +50,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
     // Search panel (right-side overlay, hidden until ⌘F)
     private let searchPanel = SearchResultsPanel()
+    private let commentsPanel = CommentsPanel()
     private var searchBarVisible = false
+    private let gitHubClient = GitHubClient()
+    private var repoRemoteURL: String?
     private var searchField: NSSearchField { searchPanel.searchField }
 
     // MARK: Setup
@@ -118,6 +121,23 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
             searchPanel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
             searchPanel.widthAnchor.constraint(equalToConstant: 320),
         ])
+
+        // Comments panel as overlay (left of search panel when both visible).
+        commentsPanel.translatesAutoresizingMaskIntoConstraints = false
+        commentsPanel.isHidden = true
+        contentView.addSubview(commentsPanel)
+        NSLayoutConstraint.activate([
+            commentsPanel.topAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.topAnchor),
+            commentsPanel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            commentsPanel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            commentsPanel.widthAnchor.constraint(equalToConstant: 320),
+        ])
+        commentsPanel.onClose = { [weak self] in
+            self?.commentsPanel.isHidden = true
+        }
+        commentsPanel.onSelectComment = { [weak self] comment in
+            self?.jumpToComment(comment)
+        }
 
         // Toolbar: sidebar toggle on the left, open-repository on the right.
         let toolbar = NSToolbar(identifier: "MainToolbar")
@@ -495,6 +515,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
             // Point the PR browser at this repo's GitHub remote.
             let remote = try? await engine.remoteURL(in: root)
+            self.repoRemoteURL = remote
             sidebar.pullRequestPanel.setRepository(remoteURL: remote)
 
             refreshDiff()
@@ -535,10 +556,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
                 self.sidebar.showFilesTab()
                 self.statusLabel.stringValue =
                     "\(document.files.count) 个文件 · +\(document.totalAdditions) −\(document.totalDeletions)"
-                self.window?.title = "GitScope — PR #\(pr.number) \(pr.title)"
-
+                                self.window?.title = "GitScope — PR #\(pr.number) \(pr.title)"
                 // Populate the commit timeline for the PR range too.
                 self.reloadCommits(base: refs.base, head: refs.head)
+                // Fetch PR review comments.
+                self.fetchPRComments(pr: pr)
             } catch is CancellationError {
             } catch {
                 self.statusLabel.stringValue = "PR 拉取失败"
@@ -562,9 +584,71 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         prBanner.isHidden = true
         branchControlRows.forEach { $0.isHidden = false }
         diffList.showsReviewButtons = false
+        diffList.inlineComments = []
+        commentsPanel.isHidden = true
         updateWindowTitle()
         selectedCommitSHA = nil
         refreshDiff()
+    }
+
+    // MARK: PR Comments
+
+    private func fetchPRComments(pr: PullRequest) {
+        guard let repositoryURL,
+              let slug = GitHubClient.repoSlug(fromRemoteURL: repoRemoteURL ?? "")
+        else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let reviewComments = try await self.gitHubClient.reviewComments(slug: slug, prNumber: pr.number)
+                let issueComments = try await self.gitHubClient.issueComments(slug: slug, prNumber: pr.number)
+                guard !Task.isCancelled else { return }
+                // Map to InlineComment.
+                let inline: [InlineComment] = reviewComments.compactMap { c in
+                    InlineComment(
+                        id: c.id, author: c.author, body: c.body,
+                        createdAt: c.createdAt, avatarURL: c.avatarURL,
+                        path: c.path, line: c.line ?? 0,
+                        isReply: c.inReplyToId != nil
+                    )
+                }
+                let general: [InlineComment] = issueComments.map { c in
+                    InlineComment(
+                        id: c.id, author: c.author, body: c.body,
+                        createdAt: c.createdAt, avatarURL: c.avatarURL,
+                        path: "", line: 0, isReply: false
+                    )
+                }
+                let all = inline + general
+                self.diffList.inlineComments = inline
+                self.commentsPanel.update(comments: all)
+                self.commentsPanel.isHidden = all.isEmpty
+            } catch {
+                // Silently ignore comment fetch failures.
+            }
+        }
+    }
+
+    private func jumpToComment(_ comment: InlineComment) {
+        // Find the row in the diff that corresponds to this comment's file + line.
+        guard let document = diffList.document else { return }
+        for (fileIndex, file) in document.files.enumerated() {
+            guard file.canonicalPath == comment.path else { continue }
+            // Find the table row for this file's line.
+            for (rowIndex, row) in diffList.currentRows.enumerated() {
+                switch row {
+                case .line(let f, let h, let l) where f == fileIndex:
+                    let diffLine = document.files[f].hunks[h].lines[l]
+                    if diffLine.newLineNumber == comment.line {
+                        diffList.scrollToRow(rowIndex)
+                        return
+                    }
+                default:
+                    continue
+                }
+            }
+            break
+        }
     }
 
     @objc private func commitSelectionChanged() {

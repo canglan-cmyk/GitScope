@@ -31,6 +31,11 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     /// Called when the user clicks an "expand context" row. Passes the file index.
     public var onExpandContext: (() -> Void)?
 
+    /// Inline comments to display in the diff. Keyed by file path → line number → comments.
+    public var inlineComments: [InlineComment] = [] {
+        didSet { rebuildRows() }
+    }
+
     /// Files that are collapsed (only header shown, content hidden).
     public private(set) var collapsedFiles: Set<Int> = []
 
@@ -68,7 +73,13 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
 
     private func rebuildRows() {
         isRebuilding = true
-        rows = document.map { DiffTableRowBuilder.rows(for: $0, mode: displayMode, collapsedFiles: collapsedFiles) } ?? []
+        rows = document.map {
+            DiffTableRowBuilder.rows(
+                for: $0, mode: displayMode,
+                collapsedFiles: collapsedFiles,
+                comments: inlineComments
+            )
+        } ?? []
         selection = nil
         if !searchQuery.isEmpty { recomputeSearchMatches() }
         tableView.reloadData()
@@ -249,7 +260,15 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     // MARK: Internals
 
     private var rows: [DiffTableRow] = []
+    /// Public read-only access to the current row array.
+    public var currentRows: [DiffTableRow] { rows }
     private let tableView = DiffSelectionTableView()
+
+    /// Scrolls the table to make the given row visible.
+    public func scrollToRow(_ row: Int) {
+        guard rows.indices.contains(row) else { return }
+        tableView.scrollRowToVisible(row)
+    }
 
     /// Reloads the diff table (e.g. after toggling review state).
     public func reloadTable() {
@@ -315,6 +334,8 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             return fileHeaderRowHeight
         case .expandContext:
             return 24
+        case .comment:
+            return 44
         case .hunkHeader, .line, .splitLine:
             return metricsView.rowHeight
         }
@@ -336,7 +357,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             cell = DiffRowCellView(frame: .zero)
             cell.identifier = DiffRowCellView.reuseIdentifier
         }
-        cell.configure(row: rows[row], document: document, theme: theme)
+        cell.configure(row: rows[row], document: document, theme: theme, comments: inlineComments)
         cell.selectedRange = selection?.range(
             inRow: row,
             textLength: cell.rowText.utf16.count
@@ -411,6 +432,8 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             return message
         case .expandContext:
             return ""
+        case .comment(_, let idx):
+            return inlineComments.indices.contains(idx) ? inlineComments[idx].body : ""
         }
     }
 
@@ -564,7 +587,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
                 let line = lines[idx]
                 lineNumber = line.newLineNumber ?? line.oldLineNumber
             }
-        case .fileHeader(let f), .hunkHeader(let f, _), .placeholder(let f, _), .expandContext(let f):
+        case .fileHeader(let f), .hunkHeader(let f, _), .placeholder(let f, _), .expandContext(let f), .comment(let f, _):
             fileIndex = f
         }
 

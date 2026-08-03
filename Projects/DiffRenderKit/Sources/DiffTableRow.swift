@@ -20,6 +20,8 @@ public enum DiffTableRow: Sendable {
     case placeholder(fileIndex: Int, message: String)
     /// Clickable row to expand context around hunks.
     case expandContext(fileIndex: Int)
+    /// An inline review comment bubble.
+    case comment(fileIndex: Int, commentIndex: Int)
 }
 
 /// How diff content is presented.
@@ -33,8 +35,16 @@ public enum DiffTableRowBuilder {
     public static func rows(
         for document: DiffDocument,
         mode: DiffDisplayMode = .unified,
-        collapsedFiles: Set<Int> = []
+        collapsedFiles: Set<Int> = [],
+        comments: [InlineComment] = []
     ) -> [DiffTableRow] {
+        // Build a lookup: path → line → [comment indices].
+        var commentLookup: [String: [Int: [Int]]] = [:]
+        for (idx, comment) in comments.enumerated() {
+            guard comment.line > 0 else { continue }
+            commentLookup[comment.path, default: [:]][comment.line, default: []].append(idx)
+        }
+
         var rows: [DiffTableRow] = []
         for (fileIndex, file) in document.files.enumerated() {
             rows.append(.fileHeader(fileIndex: fileIndex))
@@ -48,6 +58,8 @@ public enum DiffTableRowBuilder {
                 rows.append(.placeholder(fileIndex: fileIndex, message: "无文本变更"))
                 continue
             }
+            let filePath = file.canonicalPath
+            let fileComments = commentLookup[filePath] ?? [:]
             for (hunkIndex, hunk) in file.hunks.enumerated() {
                 // Add expand-context row between hunks (gap indicator).
                 if hunkIndex > 0 {
@@ -62,6 +74,14 @@ public enum DiffTableRowBuilder {
                             hunkIndex: hunkIndex,
                             lineIndex: lineIndex
                         ))
+                        // Insert comment rows after the line they're attached to.
+                        let diffLine = hunk.lines[lineIndex]
+                        if let newLine = diffLine.newLineNumber,
+                           let commentIndices = fileComments[newLine] {
+                            for commentIdx in commentIndices {
+                                rows.append(.comment(fileIndex: fileIndex, commentIndex: commentIdx))
+                            }
+                        }
                     }
                 case .split:
                     for pair in SplitRowPairer.pairs(for: hunk) {
@@ -71,6 +91,16 @@ public enum DiffTableRowBuilder {
                             oldLineIndex: pair.oldLineIndex,
                             newLineIndex: pair.newLineIndex
                         ))
+                        // Insert comments for the new-side line.
+                        if let newIdx = pair.newLineIndex {
+                            let diffLine = hunk.lines[newIdx]
+                            if let newLine = diffLine.newLineNumber,
+                               let commentIndices = fileComments[newLine] {
+                                for commentIdx in commentIndices {
+                                    rows.append(.comment(fileIndex: fileIndex, commentIndex: commentIdx))
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -95,6 +125,7 @@ public final class DiffRowCellView: DiffRenderView {
         case splitLine(old: DiffLine?, new: DiffLine?)
         case placeholder(String)
         case expandContext
+        case comment(InlineComment)
     }
 
     private var content: Content = .none
@@ -192,6 +223,7 @@ public final class DiffRowCellView: DiffRenderView {
         case .splitLine(let old, let new): return (new ?? old)?.content ?? ""
         case .placeholder(let message): return message
         case .expandContext: return ""
+        case .comment(let c): return c.body
         }
     }
 
@@ -234,7 +266,7 @@ public final class DiffRowCellView: DiffRenderView {
     /// The syntax language for the current file (used for highlighting).
     private var syntaxLanguage: SyntaxHighlighter.Language = .unknown
 
-    public func configure(row: DiffTableRow, document: DiffDocument, theme: DiffTheme) {
+    public func configure(row: DiffTableRow, document: DiffDocument, theme: DiffTheme, comments: [InlineComment] = []) {
         self.theme = theme
         switch row {
         case .fileHeader(let fileIndex):
@@ -267,6 +299,12 @@ public final class DiffRowCellView: DiffRenderView {
             content = .placeholder(message)
         case .expandContext:
             content = .expandContext
+        case .comment(_, let commentIndex):
+            if comments.indices.contains(commentIndex) {
+                content = .comment(comments[commentIndex])
+            } else {
+                content = .none
+            }
         }
         needsDisplay = true
     }
@@ -377,6 +415,39 @@ public final class DiffRowCellView: DiffRenderView {
                 baseline: bounds.height / 2 + 4,
                 in: context,
                 color: NSColor.controlAccentColor
+            )
+
+        case .comment(let comment):
+            // Draw comment bubble with author and body.
+            let bubbleInset: CGFloat = 24
+            let bubbleRect = bounds.insetBy(dx: bubbleInset, dy: 3)
+            // Background.
+            let bgColor = NSColor.controlAccentColor.withAlphaComponent(0.08)
+            bgColor.setFill()
+            let path = NSBezierPath(roundedRect: bubbleRect, xRadius: 6, yRadius: 6)
+            path.fill()
+            // Left accent bar.
+            NSColor.controlAccentColor.withAlphaComponent(0.5).setFill()
+            context.fill(NSRect(x: bubbleInset, y: 3, width: 3, height: bounds.height - 6))
+            // Author + time.
+            let header = "\(comment.author) · \(comment.relativeTime)"
+            let headerLine = makeCTLine(header, bold: true)
+            draw(
+                line: headerLine,
+                at: bubbleInset + 10,
+                baseline: 15,
+                in: context,
+                color: palette.text.nsColor
+            )
+            // Body (first line only, truncated).
+            let bodyText = comment.body.components(separatedBy: .newlines).first ?? comment.body
+            let bodyLine = makeCTLine(String(bodyText.prefix(120)))
+            draw(
+                line: bodyLine,
+                at: bubbleInset + 10,
+                baseline: 33,
+                in: context,
+                color: palette.secondaryText.nsColor
             )
         }
     }
