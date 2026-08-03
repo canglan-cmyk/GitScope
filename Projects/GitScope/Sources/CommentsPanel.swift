@@ -106,12 +106,40 @@ final class CommentsPanel: NSView {
         setup()
     }
 
+    private let leftBorder: NSBox = {
+        let box = NSBox()
+        box.boxType = .custom
+        box.fillColor = .separatorColor
+        box.borderWidth = 0
+        box.translatesAutoresizingMaskIntoConstraints = false
+        return box
+    }()
+
+    private let backgroundView: NSVisualEffectView = {
+        let v = NSVisualEffectView()
+        v.material = .sidebar
+        v.blendingMode = .behindWindow
+        v.state = .active
+        v.translatesAutoresizingMaskIntoConstraints = false
+        return v
+    }()
+
     private func setup() {
         wantsLayer = true
+
+        // Opaque sidebar-style background.
+        addSubview(backgroundView)
+        NSLayoutConstraint.activate([
+            backgroundView.topAnchor.constraint(equalTo: topAnchor),
+            backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            backgroundView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
 
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
 
+        addSubview(leftBorder)
         addSubview(titleLabel)
         addSubview(closeButton)
         addSubview(countLabel)
@@ -149,6 +177,11 @@ final class CommentsPanel: NSView {
 
             emptyLabel.centerXAnchor.constraint(equalTo: scrollView.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 32),
+
+            leftBorder.topAnchor.constraint(equalTo: topAnchor),
+            leftBorder.bottomAnchor.constraint(equalTo: bottomAnchor),
+            leftBorder.leadingAnchor.constraint(equalTo: leadingAnchor),
+            leftBorder.widthAnchor.constraint(equalToConstant: 1),
         ])
     }
 
