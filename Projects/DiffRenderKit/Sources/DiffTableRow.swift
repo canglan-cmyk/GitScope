@@ -22,6 +22,8 @@ public enum DiffTableRow: Sendable {
     case expandContext(fileIndex: Int)
     /// An inline review comment bubble.
     case comment(fileIndex: Int, commentIndex: Int)
+    /// Image preview for binary image files.
+    case imagePreview(fileIndex: Int)
 }
 
 /// How diff content is presented.
@@ -51,7 +53,13 @@ public enum DiffTableRowBuilder {
             // Skip content rows for collapsed (reviewed) files.
             if collapsedFiles.contains(fileIndex) { continue }
             if file.isBinary {
-                rows.append(.placeholder(fileIndex: fileIndex, message: "二进制文件"))
+                let ext = (file.canonicalPath as NSString).pathExtension.lowercased()
+                let imageExts: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp", "tiff", "heic"]
+                if imageExts.contains(ext) {
+                    rows.append(.imagePreview(fileIndex: fileIndex))
+                } else {
+                    rows.append(.placeholder(fileIndex: fileIndex, message: "二进制文件"))
+                }
                 continue
             }
             if file.hunks.isEmpty {
@@ -305,6 +313,8 @@ public final class DiffRowCellView: DiffRenderView {
             } else {
                 content = .none
             }
+        case .imagePreview:
+            content = .placeholder("图片预览")
         }
         needsDisplay = true
     }

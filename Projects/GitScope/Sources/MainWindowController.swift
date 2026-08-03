@@ -204,6 +204,43 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
             self.refreshDiff()
         }
 
+        // Image preview: load image data from git for binary image files.
+        diffList.imageForFile = { [weak self] fileIndex in
+            guard let self,
+                  let document = self.diffList.document,
+                  document.files.indices.contains(fileIndex),
+                  let repositoryURL = self.repositoryURL
+            else { return nil }
+            let file = document.files[fileIndex]
+            let path = file.canonicalPath
+            // Determine which ref to use (head for additions/modifications).
+            let ref: String
+            if let active = self.activePullRequest {
+                ref = active.head
+            } else if let head = self.headPopup.titleOfSelectedItem {
+                ref = head
+            } else {
+                return nil
+            }
+            // Synchronous git show to get image data.
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+            process.arguments = ["show", "\(ref):\(path)"]
+            process.currentDirectoryURL = repositoryURL
+            let pipe = Pipe()
+            process.standardOutput = pipe
+            process.standardError = FileHandle.nullDevice
+            do {
+                try process.run()
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                guard process.terminationStatus == 0, !data.isEmpty else { return nil }
+                return NSImage(data: data)
+            } catch {
+                return nil
+            }
+        }
+
         // ⌘F anywhere in the window opens the search bar. Key events don't
         // reliably reach the window controller, so use a local monitor.
         NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in

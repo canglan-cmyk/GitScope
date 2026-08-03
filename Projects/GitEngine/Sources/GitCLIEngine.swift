@@ -216,6 +216,64 @@ public struct GitCLIEngine: GitEngine {
     // MARK: - Process runner
 
     /// Runs git with the given arguments and returns stdout as UTF-8 text.
+    /// Extracts the raw binary content of a file at a specific revision.
+    /// Uses `git show <rev>:<path>` to get the blob.
+    public func fileData(
+        in repository: URL,
+        ref: String,
+        path: String
+    ) async throws -> Data {
+        return try await runData(
+            ["show", "\(ref):\(path)"],
+            workingDirectory: repository
+        )
+    }
+
+    private func runData(
+        _ arguments: [String],
+        workingDirectory: URL
+    ) async throws -> Data {
+        guard FileManager.default.isExecutableFile(atPath: gitPath) else {
+            throw GitEngineError.gitNotFound
+        }
+        let gitPath = self.gitPath
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: gitPath)
+                process.arguments = arguments
+                process.currentDirectoryURL = workingDirectory
+                process.environment = ProcessInfo.processInfo.environment.merging(
+                    ["GIT_PAGER": "cat", "LC_ALL": "en_US.UTF-8"],
+                    uniquingKeysWith: { _, new in new }
+                )
+                let stdoutPipe = Pipe()
+                let stderrPipe = Pipe()
+                process.standardOutput = stdoutPipe
+                process.standardError = stderrPipe
+                do {
+                    try process.run()
+                } catch {
+                    continuation.resume(throwing: GitEngineError.gitNotFound)
+                    return
+                }
+                let stdoutData = stdoutPipe.fileHandleForReading.readDataToEndOfFile()
+                let stderrData = stderrPipe.fileHandleForReading.readDataToEndOfFile()
+                process.waitUntilExit()
+                if process.terminationStatus != 0 {
+                    let stderr = String(data: stderrData, encoding: .utf8) ?? ""
+                    continuation.resume(throwing: GitEngineError.commandFailed(
+                        command: arguments.joined(separator: " "),
+                        exitCode: process.terminationStatus,
+                        stderr: stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+                    ))
+                    return
+                }
+                continuation.resume(returning: stdoutData)
+            }
+        }
+    }
+
     private func run(
         _ arguments: [String],
         workingDirectory: URL

@@ -36,6 +36,13 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         didSet { rebuildRows() }
     }
 
+    /// Callback to load an image for a file at a given ref. Returns NSImage or nil.
+    /// Called with (fileIndex) and should return the loaded NSImage asynchronously.
+    public var imageForFile: ((Int) -> NSImage?)?
+
+    /// Cache of loaded images keyed by file index.
+    public var imageCache: [Int: NSImage] = [:]
+
     /// Files that are collapsed (only header shown, content hidden).
     public private(set) var collapsedFiles: Set<Int> = []
 
@@ -336,17 +343,50 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             return 24
         case .comment:
             return 44
+        case .imagePreview(let fileIndex):
+            if let img = imageCache[fileIndex] {
+                return ImagePreviewCellView.preferredHeight(for: img, maxWidth: tableView.bounds.width)
+            }
+            return 200 // Default while loading.
         case .hunkHeader, .line, .splitLine:
             return metricsView.rowHeight
         }
     }
 
-    public func tableView(
+        public func tableView(
         _ tableView: NSTableView,
         viewFor tableColumn: NSTableColumn?,
         row: Int
     ) -> NSView? {
         guard let document else { return nil }
+
+        // Image preview rows use a different cell type.
+        if case .imagePreview(let fileIndex) = rows[row] {
+            let imgCell: ImagePreviewCellView
+            if let reused = tableView.makeView(
+                withIdentifier: ImagePreviewCellView.reuseIdentifier, owner: self
+            ) as? ImagePreviewCellView {
+                imgCell = reused
+            } else {
+                imgCell = ImagePreviewCellView(frame: .zero)
+                imgCell.identifier = ImagePreviewCellView.reuseIdentifier
+            }
+            let file = document.files[fileIndex]
+            let img = imageCache[fileIndex] ?? imageForFile?(fileIndex)
+            if let loadedImg = img, imageCache[fileIndex] == nil {
+                imageCache[fileIndex] = loadedImg
+                // Reload row height now that we have the image.
+                tableView.noteHeightOfRows(withIndexesChanged: IndexSet(integer: row))
+            }
+            let status: String
+            switch file.change {
+            case .added: status = "新增图片"
+            case .deleted: status = "删除图片"
+            default: status = "图片"
+            }
+            imgCell.configureSingle(image: img, status: status)
+            return imgCell
+        }
 
         let cell: DiffRowCellView
         if let reused = tableView.makeView(
@@ -434,6 +474,8 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             return ""
         case .comment(_, let idx):
             return inlineComments.indices.contains(idx) ? inlineComments[idx].body : ""
+        case .imagePreview:
+            return ""
         }
     }
 
@@ -587,7 +629,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
                 let line = lines[idx]
                 lineNumber = line.newLineNumber ?? line.oldLineNumber
             }
-        case .fileHeader(let f), .hunkHeader(let f, _), .placeholder(let f, _), .expandContext(let f), .comment(let f, _):
+        case .fileHeader(let f), .hunkHeader(let f, _), .placeholder(let f, _), .expandContext(let f), .comment(let f, _), .imagePreview(let f):
             fileIndex = f
         }
 
