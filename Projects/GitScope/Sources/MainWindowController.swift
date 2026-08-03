@@ -791,7 +791,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
             head = pickedHead
             mode = modePopup.indexOfSelectedItem == 0 ? .threeDot : .twoDot
         }
-        let commitSHA = selectedCommitSHA
+                let commitSHA = selectedCommitSHA
+
+        // Set persistence key for review progress in normal branch mode.
+        if activePullRequest == nil {
+            if let slug = GitHubClient.repoSlug(fromRemoteURL: repoRemoteURL ?? "") {
+                sidebar.reviewPersistenceKey = "\(slug)/\(base)..\(head)"
+            }
+            // Enable review buttons in normal diff mode too.
+            diffList.showsReviewButtons = true
+        }
 
         statusLabel.stringValue = "对比中…"
         diffTask?.cancel()
