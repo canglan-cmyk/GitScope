@@ -89,6 +89,61 @@ public final class DiffRowCellView: DiffRenderView {
 
     private var content: Content = .none
 
+    // MARK: Review button (file headers only, PR mode)
+
+    /// Whether the review checkmark button is visible (set by the controller).
+    public var showsReviewButton: Bool = false {
+        didSet {
+            if showsReviewButton != oldValue {
+                _ = reviewButton // ensure created
+                reviewButton.isHidden = !showsReviewButton
+            }
+        }
+    }
+
+    /// Whether this file is marked as reviewed.
+    public var isReviewed: Bool = false {
+        didSet {
+            if isReviewed != oldValue {
+                let symbol = isReviewed ? "checkmark.circle.fill" : "circle"
+                reviewButton.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
+                reviewButton.contentTintColor = isReviewed ? .systemGreen : .tertiaryLabelColor
+            }
+        }
+    }
+
+    /// Called when the user clicks the review button; passes the file index.
+    public var onToggleReview: ((Int) -> Void)?
+
+    /// The file index for the current file header (used by the review callback).
+    public var fileIndex: Int = -1
+
+    private lazy var reviewButton: NSButton = {
+        let btn = NSButton(
+            image: NSImage(systemSymbolName: "circle", accessibilityDescription: nil)!,
+            target: self,
+            action: #selector(reviewButtonClicked)
+        )
+        btn.isBordered = false
+        btn.imageScaling = .scaleProportionallyUpOrDown
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        btn.isHidden = true
+        btn.setContentHuggingPriority(.required, for: .horizontal)
+        addSubview(btn)
+        NSLayoutConstraint.activate([
+            btn.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            btn.centerYAnchor.constraint(equalTo: centerYAnchor),
+            btn.widthAnchor.constraint(equalToConstant: 20),
+            btn.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        return btn
+    }()
+
+    @objc private func reviewButtonClicked() {
+        guard fileIndex >= 0 else { return }
+        onToggleReview?(fileIndex)
+    }
+
     /// Selected character range within this row's text, drawn as a highlight.
     public var selectedRange: Range<Int>? {
         didSet {

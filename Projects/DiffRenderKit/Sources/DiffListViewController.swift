@@ -17,6 +17,17 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         }
     }
 
+    /// When true, file header rows show a review checkmark button.
+    public var showsReviewButtons: Bool = false {
+        didSet { if showsReviewButtons != oldValue { tableView.reloadData() } }
+    }
+
+    /// Returns whether a file is reviewed (queried per file header row).
+    public var isFileReviewed: ((Int) -> Bool)?
+
+    /// Called when the user clicks the review button on a file header.
+    public var onToggleFileReview: ((Int) -> Void)?
+
     /// Unified (stacked) or split (side-by-side) presentation.
     public var displayMode: DiffDisplayMode = .unified {
         didSet {
@@ -25,11 +36,15 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         }
     }
 
+    private var isRebuilding = false
+
     private func rebuildRows() {
+        isRebuilding = true
         rows = document.map { DiffTableRowBuilder.rows(for: $0, mode: displayMode) } ?? []
         selection = nil
         if !searchQuery.isEmpty { recomputeSearchMatches() }
         tableView.reloadData()
+        isRebuilding = false
     }
 
     // MARK: Search
@@ -37,6 +52,10 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     public struct SearchMatch: Sendable {
         public let row: Int
         public let range: Range<Int> // UTF-16 offsets within the row text
+        public let filePath: String
+        public let fileIndex: Int
+        public let lineNumber: Int? // new-side line number (old side if deletion)
+        public let preview: String // full row text for list previews
     }
 
     public enum SearchScope: Sendable {
@@ -89,6 +108,14 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         onSearchResultsChanged?(searchMatches.count, currentMatchIndex + 1)
     }
 
+    /// Jumps directly to a specific match (results-panel click).
+    public func goToMatch(at index: Int) {
+        guard searchMatches.indices.contains(index) else { return }
+        currentMatchIndex = index
+        revealMatch(at: index)
+        onSearchResultsChanged?(searchMatches.count, index + 1)
+    }
+
     private func recomputeSearchMatches() {
         searchMatches = []
         guard let document, !searchQuery.isEmpty else { return }
@@ -108,6 +135,28 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
             }
             if searchScope == .changedLinesOnly, lineChange == .context { continue }
 
+            // Location details for the results panel.
+            var filePath = ""
+            var fileIndex = 0
+            var lineNumber: Int?
+            switch row {
+            case .line(let f, let h, let l):
+                fileIndex = f
+                filePath = document.files[f].canonicalPath
+                let line = document.files[f].hunks[h].lines[l]
+                lineNumber = line.newLineNumber ?? line.oldLineNumber
+            case .splitLine(let f, let h, let oldL, let newL):
+                fileIndex = f
+                filePath = document.files[f].canonicalPath
+                let lines = document.files[f].hunks[h].lines
+                if let idx = newL ?? oldL {
+                    let line = lines[idx]
+                    lineNumber = line.newLineNumber ?? line.oldLineNumber
+                }
+            default:
+                break
+            }
+
             let text = text(forRow: rowIndex) as NSString
             var searchRange = NSRange(location: 0, length: text.length)
             while searchRange.length > 0 {
@@ -117,7 +166,11 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
                 guard found.location != NSNotFound else { break }
                 searchMatches.append(SearchMatch(
                     row: rowIndex,
-                    range: found.location..<(found.location + found.length)
+                    range: found.location..<(found.location + found.length),
+                    filePath: filePath,
+                    fileIndex: fileIndex,
+                    lineNumber: lineNumber,
+                    preview: text as String
                 ))
                 let nextLocation = found.location + max(found.length, 1)
                 searchRange = NSRange(location: nextLocation, length: text.length - nextLocation)
@@ -169,6 +222,11 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
 
     private var rows: [DiffTableRow] = []
     private let tableView = DiffSelectionTableView()
+
+    /// Reloads the diff table (e.g. after toggling review state).
+    public func reloadTable() {
+        tableView.reloadData()
+    }
     private let scrollView = NSScrollView()
     /// Off-screen metrics provider (row height for the current theme/font).
     private let metricsView = DiffRowCellView(frame: .zero)
@@ -221,6 +279,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     // MARK: NSTableViewDelegate
 
     public func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        guard rows.indices.contains(row) else { return metricsView.rowHeight }
         switch rows[row] {
         case .fileHeader:
             return fileHeaderRowHeight
@@ -255,6 +314,20 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         let highlights = searchHighlights(forRow: row)
         cell.searchHighlights = highlights.all
         cell.currentSearchHighlight = highlights.current
+
+        // Review button for file headers in PR mode.
+        if case .fileHeader(let fileIndex) = rows[row] {
+            cell.fileIndex = fileIndex
+            cell.showsReviewButton = showsReviewButtons
+            cell.isReviewed = isFileReviewed?(fileIndex) ?? false
+            cell.onToggleReview = { [weak self] idx in
+                self?.onToggleFileReview?(idx)
+            }
+        } else {
+            cell.showsReviewButton = false
+            cell.onToggleReview = nil
+        }
+
         return cell
     }
 
@@ -308,6 +381,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     }
 
     private func applySelectionToVisibleCells() {
+        guard !isRebuilding else { return }
         let visibleRows = tableView.rows(in: tableView.visibleRect)
         for row in visibleRows.lowerBound..<visibleRows.upperBound {
             guard let cell = tableView.view(atColumn: 0, row: row, makeIfNecessary: false)

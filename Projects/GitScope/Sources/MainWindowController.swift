@@ -48,14 +48,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     private let prRefsLabel = NSTextField(labelWithString: "")
     private var branchControlRows: [NSView] = []
 
-    // Search bar (hidden until ⌘F)
-    private let searchBar = NSView()
-    private let searchField = NSSearchField()
-    private let searchResultLabel = NSTextField(labelWithString: "")
-    private let searchScopeControl = NSSegmentedControl(
-        labels: ["全部行", "仅变更行"], trackingMode: .selectOne, target: nil, action: nil
-    )
+    // Search panel (right-side overlay, hidden until ⌘F)
+    private let searchPanel = SearchResultsPanel()
     private var searchBarVisible = false
+    private var searchField: NSSearchField { searchPanel.searchField }
 
     // MARK: Setup
 
@@ -111,6 +107,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
         window.contentViewController = splitViewController
 
+        // Search panel as overlay on the right side of the content area.
+        searchPanel.translatesAutoresizingMaskIntoConstraints = false
+        searchPanel.isHidden = true
+        let contentView = window.contentView!
+        contentView.addSubview(searchPanel)
+        NSLayoutConstraint.activate([
+            searchPanel.topAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.topAnchor),
+            searchPanel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
+            searchPanel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            searchPanel.widthAnchor.constraint(equalToConstant: 320),
+        ])
+
         // Toolbar: sidebar toggle on the left, open-repository on the right.
         let toolbar = NSToolbar(identifier: "MainToolbar")
         toolbar.delegate = self
@@ -127,7 +135,27 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         }
 
         diffList.onSearchResultsChanged = { [weak self] count, current in
-            self?.searchResultLabel.stringValue = count == 0 ? "无结果" : "\(current)/\(count)"
+            guard let self else { return }
+            self.searchPanel.update(
+                matches: self.diffList.searchMatches,
+                currentIndex: current - 1
+            )
+        }
+        searchPanel.onSelectMatch = { [weak self] index in
+            self?.diffList.goToMatch(at: index)
+        }
+        searchPanel.onClose = { [weak self] in
+            self?.hideSearchBar()
+        }
+
+        // Diff area: review button on file headers (PR mode).
+        diffList.isFileReviewed = { [weak self] fileIndex in
+            self?.sidebar.isReviewed(fileIndex: fileIndex) ?? false
+        }
+        diffList.onToggleFileReview = { [weak self] fileIndex in
+            guard let self else { return }
+            self.sidebar.toggleReviewed(fileIndex: fileIndex)
+            self.diffList.reloadTable()
         }
 
         // PR browser: pick a PR → fetch its refs → local diff.
@@ -217,77 +245,25 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     }
 
     private func setupSearchBar() {
-        guard let contentView = window?.contentView else { return }
-
-        searchBar.wantsLayer = true
-        searchBar.isHidden = true
-
-        let material = NSVisualEffectView()
-        material.material = .headerView
-        material.blendingMode = .withinWindow
-
-        searchField.placeholderString = "在 diff 中搜索（回车下一个，⇧回车上一个）"
         searchField.delegate = self
         searchField.target = self
         searchField.action = #selector(searchFieldAction)
-
-        searchScopeControl.selectedSegment = 0
-        searchScopeControl.target = self
-        searchScopeControl.action = #selector(searchScopeChanged)
-        searchScopeControl.controlSize = .small
-
-        searchResultLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        searchResultLabel.textColor = .secondaryLabelColor
-
-        let closeButton = NSButton(
-            image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "关闭")!,
-            target: self, action: #selector(hideSearchBar)
-        )
-        closeButton.isBordered = false
-
-        let stack = NSStackView(views: [searchField, searchScopeControl, searchResultLabel, closeButton])
-        stack.orientation = .horizontal
-        stack.spacing = 8
-        stack.edgeInsets = NSEdgeInsets(top: 6, left: 10, bottom: 6, right: 10)
-
-        material.translatesAutoresizingMaskIntoConstraints = false
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        searchBar.translatesAutoresizingMaskIntoConstraints = false
-        searchBar.addSubview(material)
-        searchBar.addSubview(stack)
-        contentView.addSubview(searchBar)
-
-        NSLayoutConstraint.activate([
-            material.topAnchor.constraint(equalTo: searchBar.topAnchor),
-            material.bottomAnchor.constraint(equalTo: searchBar.bottomAnchor),
-            material.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor),
-            material.trailingAnchor.constraint(equalTo: searchBar.trailingAnchor),
-
-            stack.topAnchor.constraint(equalTo: searchBar.topAnchor),
-            stack.bottomAnchor.constraint(equalTo: searchBar.bottomAnchor),
-            stack.leadingAnchor.constraint(equalTo: searchBar.leadingAnchor),
-            stack.trailingAnchor.constraint(equalTo: searchBar.trailingAnchor),
-
-            searchBar.topAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.topAnchor),
-            searchBar.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
-            searchBar.widthAnchor.constraint(lessThanOrEqualToConstant: 560),
-            searchField.widthAnchor.constraint(greaterThanOrEqualToConstant: 260),
-        ])
+        searchPanel.scopeControl.target = self
+        searchPanel.scopeControl.action = #selector(searchScopeChanged)
     }
 
     // MARK: Search actions
 
     @objc private func showSearchBar() {
-        searchBar.isHidden = false
         searchBarVisible = true
-        window?.makeFirstResponder(searchField)
+        searchPanel.isHidden = false
+        searchPanel.focusSearchField()
     }
-
     @objc private func hideSearchBar() {
-        searchBar.isHidden = true
         searchBarVisible = false
+        searchPanel.isHidden = true
         diffList.clearSearch()
-        searchResultLabel.stringValue = ""
+        searchPanel.clear()
     }
 
     @objc private func searchFieldAction() {
@@ -302,7 +278,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     }
 
     @objc private func searchScopeChanged() {
-        diffList.searchScope = searchScopeControl.selectedSegment == 1
+        diffList.searchScope = searchPanel.scopeControl.selectedSegment == 1
             ? .changedLinesOnly : .allLines
     }
 
@@ -311,7 +287,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         let query = searchField.stringValue
         if query.isEmpty {
             diffList.clearSearch()
-            searchResultLabel.stringValue = ""
+            searchPanel.clear()
         } else {
             diffList.search(query)
         }
@@ -561,17 +537,18 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     /// Switches the sidebar into PR mode: banner on, branch pickers off —
     /// one source of truth for what the diff shows.
     private func enterPullRequestMode(pr: PullRequest, base: String, head: String) {
-        activePullRequest = (pr, base, head)
+                activePullRequest = (pr, base, head)
         prTitleLabel.stringValue = "PR #\(pr.number) \(pr.title)"
         prRefsLabel.stringValue = "\(pr.headRef) → \(pr.baseRef)"
         prBanner.isHidden = false
         branchControlRows.forEach { $0.isHidden = true }
+        diffList.showsReviewButtons = true
     }
-
     @objc private func exitPullRequestMode() {
         activePullRequest = nil
         prBanner.isHidden = true
         branchControlRows.forEach { $0.isHidden = false }
+        diffList.showsReviewButtons = false
         updateWindowTitle()
         selectedCommitSHA = nil
         refreshDiff()

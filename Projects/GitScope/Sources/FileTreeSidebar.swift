@@ -407,6 +407,7 @@ final class FileTreeSidebarController: NSViewController,
     // MARK: NSSearchFieldDelegate
 
     func controlTextDidChange(_ obj: Notification) {
+        guard (obj.object as? NSSearchField) === filterField else { return }
         rebuildTree()
     }
 
