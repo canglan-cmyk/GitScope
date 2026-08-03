@@ -161,7 +161,7 @@ final class FileTreeNode {
 /// files grouped by category with review read-marks.
 @MainActor
 final class FileTreeSidebarController: NSViewController,
-    NSOutlineViewDataSource, NSOutlineViewDelegate, NSSearchFieldDelegate {
+    NSOutlineViewDataSource, NSOutlineViewDelegate, NSSearchFieldDelegate, NSMenuDelegate {
 
     /// Called when the user picks a file (index into document.files).
     var onSelectFile: ((Int) -> Void)?
@@ -302,6 +302,7 @@ final class FileTreeSidebarController: NSViewController,
         outlineView.action = #selector(rowClicked)
         outlineView.autoresizesOutlineColumn = true
         outlineView.indentationPerLevel = 12
+        outlineView.allowsMultipleSelection = true
         outlineView.menu = makeContextMenu()
 
         scrollView.documentView = outlineView
@@ -379,13 +380,24 @@ final class FileTreeSidebarController: NSViewController,
 
     private func makeContextMenu() -> NSMenu {
         let menu = NSMenu()
-        let toggleItem = NSMenuItem(
-            title: "标记为已看/未看",
-            action: #selector(contextToggleReviewed),
+        menu.delegate = self
+        let markReviewed = NSMenuItem(
+            title: "标记为已看",
+            action: #selector(contextMarkReviewed),
             keyEquivalent: ""
         )
-        toggleItem.target = self
-        menu.addItem(toggleItem)
+        markReviewed.target = self
+        menu.addItem(markReviewed)
+
+        let markUnreviewed = NSMenuItem(
+            title: "标记为未看",
+            action: #selector(contextMarkUnreviewed),
+            keyEquivalent: ""
+        )
+        markUnreviewed.target = self
+        menu.addItem(markUnreviewed)
+
+        menu.addItem(.separator())
 
         let editorItem = NSMenuItem(
             title: "在编辑器中打开",
@@ -397,24 +409,87 @@ final class FileTreeSidebarController: NSViewController,
         return menu
     }
 
-    @objc private func contextToggleReviewed() {
-        guard let node = clickedFileNode(), let fileIndex = node.fileIndex else { return }
-        toggleReviewed(fileIndex: fileIndex)
+    /// Collects all file indices from the current selection or clicked item.
+    /// Supports files, folders (recursively), and multi-selection.
+    private func fileIndicesForContextAction() -> [Int] {
+        var indices: [Int] = []
+        let selectedRows = outlineView.selectedRowIndexes
+        let clickedRow = outlineView.clickedRow
+
+        // If clicked row is in the selection, use the entire selection.
+        // Otherwise, use only the clicked row.
+        let rowsToProcess: IndexSet
+        if clickedRow >= 0, selectedRows.contains(clickedRow), selectedRows.count > 1 {
+            rowsToProcess = selectedRows
+        } else if clickedRow >= 0 {
+            rowsToProcess = IndexSet(integer: clickedRow)
+        } else {
+            rowsToProcess = selectedRows
+        }
+
+        for row in rowsToProcess {
+            guard let node = outlineView.item(atRow: row) as? FileTreeNode else { continue }
+            indices.append(contentsOf: collectFileIndices(from: node))
+        }
+        return Array(Set(indices)) // Deduplicate.
+    }
+
+    /// Recursively collects all file indices from a node (file or folder).
+    private func collectFileIndices(from node: FileTreeNode) -> [Int] {
+        if let fileIndex = node.fileIndex {
+            return [fileIndex]
+        }
+        // Directory or category: recurse into children.
+        var result: [Int] = []
+        for child in node.children {
+            result.append(contentsOf: collectFileIndices(from: child))
+        }
+        return result
+    }
+
+    @objc private func contextMarkReviewed() {
+        let indices = fileIndicesForContextAction()
+        for fileIndex in indices {
+            markReviewed(fileIndex: fileIndex, reviewed: true)
+        }
+        finishBatchMark()
+    }
+
+    @objc private func contextMarkUnreviewed() {
+        let indices = fileIndicesForContextAction()
+        for fileIndex in indices {
+            markReviewed(fileIndex: fileIndex, reviewed: false)
+        }
+        finishBatchMark()
+    }
+
+    /// Marks a file as reviewed or unreviewed without toggling.
+    private func markReviewed(fileIndex: Int, reviewed: Bool) {
+        guard let document, document.files.indices.contains(fileIndex) else { return }
+        let path = document.files[fileIndex].canonicalPath
+        if reviewed {
+            reviewedFiles.insert(path)
+        } else {
+            reviewedFiles.remove(path)
+        }
         onToggleReviewed?(fileIndex)
     }
 
-    @objc private func contextOpenInEditor() {
-        guard let node = clickedFileNode(), let fileIndex = node.fileIndex else { return }
-        onOpenInEditor?(fileIndex)
+    /// Called after batch mark operations to persist and refresh UI.
+    private func finishBatchMark() {
+        saveReviewedFiles()
+        updateReviewedSummary()
+        outlineView.reloadData()
+        restoreExpansion()
     }
 
-    private func clickedFileNode() -> FileTreeNode? {
-        let row = outlineView.clickedRow
-        guard row >= 0,
-              let node = outlineView.item(atRow: row) as? FileTreeNode,
-              !node.isDirectory
-        else { return nil }
-        return node
+    @objc private func contextOpenInEditor() {
+        let clickedRow = outlineView.clickedRow
+        guard clickedRow >= 0,
+              let node = outlineView.item(atRow: clickedRow) as? FileTreeNode,
+              let fileIndex = node.fileIndex
+        else { return }
+        onOpenInEditor?(fileIndex)
     }
 
     // MARK: Actions
