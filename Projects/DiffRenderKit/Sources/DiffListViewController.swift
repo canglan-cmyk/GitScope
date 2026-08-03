@@ -490,6 +490,19 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
         return false
     }
 
+    /// Returns true if the given row is a file header row.
+    func isFileHeaderRow(at row: Int) -> Bool {
+        guard rows.indices.contains(row) else { return false }
+        if case .fileHeader = rows[row] { return true }
+        return false
+    }
+
+    /// Returns the file index for a given row (must be a file header row).
+    func fileIndex(forRow row: Int) -> Int {
+        guard rows.indices.contains(row), case .fileHeader(let idx) = rows[row] else { return -1 }
+        return idx
+    }
+
     func clearSelection() {
         selection = nil
     }
@@ -639,6 +652,11 @@ final class DiffSelectionTableView: NSTableView {
         if clickedRow >= 0, let owner = selectionOwner {
             if owner.isExpandContextRow(at: clickedRow) {
                 owner.onExpandContext?()
+                return
+            }
+            // Click on file header triangle area (left 20px) toggles collapse.
+            if owner.isFileHeaderRow(at: clickedRow) && point.x < 20 {
+                owner.toggleCollapse(at: owner.fileIndex(forRow: clickedRow))
                 return
             }
         }
