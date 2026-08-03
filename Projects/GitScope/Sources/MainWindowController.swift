@@ -609,12 +609,16 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     /// Switches the sidebar into PR mode: banner on, branch pickers off —
     /// one source of truth for what the diff shows.
     private func enterPullRequestMode(pr: PullRequest, base: String, head: String) {
-                activePullRequest = (pr, base, head)
+        activePullRequest = (pr, base, head)
         prTitleLabel.stringValue = "PR #\(pr.number) \(pr.title)"
         prRefsLabel.stringValue = "\(pr.headRef) → \(pr.baseRef)"
         prBanner.isHidden = false
         branchControlRows.forEach { $0.isHidden = true }
         diffList.showsReviewButtons = true
+        // Set persistence key for review progress.
+        if let slug = GitHubClient.repoSlug(fromRemoteURL: repoRemoteURL ?? "") {
+            sidebar.reviewPersistenceKey = "\(slug)/\(pr.number)"
+        }
     }
     @objc private func exitPullRequestMode() {
         activePullRequest = nil
@@ -623,6 +627,8 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         diffList.showsReviewButtons = false
         diffList.inlineComments = []
         commentsPanel.isHidden = true
+        // Keep persisted review data but disconnect the key so normal diffs don't save.
+        sidebar.reviewPersistenceKey = nil
         updateWindowTitle()
         selectedCommitSHA = nil
         refreshDiff()

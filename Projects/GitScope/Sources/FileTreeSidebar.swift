@@ -170,9 +170,39 @@ final class FileTreeSidebarController: NSViewController,
     /// Called when the user asks to open a file in the external editor.
     var onOpenInEditor: ((Int) -> Void)?
 
+    // MARK: Review persistence
+
+    /// A key identifying the current comparison (e.g. repo slug + PR number) for persisting review state.
+    var reviewPersistenceKey: String? {
+        didSet {
+            if let key = reviewPersistenceKey {
+                let saved = UserDefaults.standard.stringArray(forKey: "ReviewedFiles.\(key)") ?? []
+                reviewedFiles = Set(saved)
+                updateReviewedSummary()
+                outlineView.reloadData()
+                restoreExpansion()
+            }
+        }
+    }
+
+    private func saveReviewedFiles() {
+        guard let key = reviewPersistenceKey else { return }
+        UserDefaults.standard.set(Array(reviewedFiles), forKey: "ReviewedFiles.\(key)")
+    }
+
+    /// Clears persisted review state for the current key.
+    func clearPersistedReviewState() {
+        guard let key = reviewPersistenceKey else { return }
+        UserDefaults.standard.removeObject(forKey: "ReviewedFiles.\(key)")
+        reviewPersistenceKey = nil
+    }
+
     var document: DiffDocument? {
         didSet {
-            reviewedFiles.removeAll()
+            // Only clear reviewed files if there's no persistence key (non-PR mode).
+            if reviewPersistenceKey == nil {
+                reviewedFiles.removeAll()
+            }
             rebuildTree()
         }
     }
@@ -194,6 +224,7 @@ final class FileTreeSidebarController: NSViewController,
         } else {
             reviewedFiles.insert(path)
         }
+        saveReviewedFiles()
         updateReviewedSummary()
         outlineView.reloadData()
         restoreExpansion()
