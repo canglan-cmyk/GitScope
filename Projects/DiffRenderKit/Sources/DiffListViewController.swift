@@ -718,15 +718,17 @@ final class DiffSelectionTableView: NSTableView {
     override var acceptsFirstResponder: Bool { true }
 
     override func resetCursorRects() {
-        // Default iBeam for text content.
-        addCursorRect(visibleRect, cursor: .iBeam)
-        // Pointing hand for clickable rows (file headers, expand context).
-        guard let owner = selectionOwner else { return }
+        guard let owner = selectionOwner else {
+            super.resetCursorRects()
+            return
+        }
         let visibleRows = rows(in: visibleRect)
         for row in visibleRows.lowerBound..<visibleRows.upperBound {
+            let rowRect = rect(ofRow: row)
             if owner.isFileHeaderRow(at: row) || owner.isExpandContextRow(at: row) {
-                let rowRect = rect(ofRow: row)
                 addCursorRect(rowRect, cursor: .pointingHand)
+            } else {
+                addCursorRect(rowRect, cursor: .iBeam)
             }
         }
     }
