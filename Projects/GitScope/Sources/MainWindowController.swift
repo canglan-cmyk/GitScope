@@ -110,30 +110,11 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
         window.contentViewController = splitViewController
 
-        // Search panel as overlay on the right side of the content area.
-        searchPanel.translatesAutoresizingMaskIntoConstraints = false
-        searchPanel.isHidden = true
-        let contentView = window.contentView!
-        contentView.addSubview(searchPanel)
-        NSLayoutConstraint.activate([
-            searchPanel.topAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.topAnchor),
-            searchPanel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            searchPanel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            searchPanel.widthAnchor.constraint(equalToConstant: 320),
-        ])
-
-        // Comments panel as overlay (left of search panel when both visible).
-        commentsPanel.translatesAutoresizingMaskIntoConstraints = false
-        commentsPanel.isHidden = true
-        contentView.addSubview(commentsPanel)
-        NSLayoutConstraint.activate([
-            commentsPanel.topAnchor.constraint(equalTo: contentView.safeAreaLayoutGuide.topAnchor),
-            commentsPanel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            commentsPanel.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
-            commentsPanel.widthAnchor.constraint(equalToConstant: 320),
-        ])
+        // Search and Comments panels are now embedded in the sidebar navigator tabs.
+        sidebar.searchContentView = searchPanel
+        sidebar.commentsContentView = commentsPanel
         commentsPanel.onClose = { [weak self] in
-            self?.commentsPanel.isHidden = true
+            self?.sidebar.showFilesTab()
         }
         commentsPanel.onSelectComment = { [weak self] comment in
             self?.jumpToComment(comment)
@@ -326,12 +307,12 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
     @objc private func showSearchBar() {
         searchBarVisible = true
-        searchPanel.isHidden = false
+        sidebar.showSearchTab()
         searchPanel.focusSearchField()
     }
     @objc private func hideSearchBar() {
         searchBarVisible = false
-        searchPanel.isHidden = true
+        sidebar.showFilesTab()
         diffList.clearSearch()
         searchPanel.clear()
     }
@@ -619,7 +600,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         modePopup.isHidden = false
         diffList.showsReviewButtons = false
         diffList.inlineComments = []
-        commentsPanel.isHidden = true
+        sidebar.showFilesTab()
         // Keep persisted review data but disconnect the key so normal diffs don't save.
         sidebar.reviewPersistenceKey = nil
         updateWindowTitle()
@@ -658,7 +639,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
                 let all = inline + general
                 self.diffList.inlineComments = inline
                 self.commentsPanel.update(comments: all)
-                self.commentsPanel.isHidden = all.isEmpty
+                if !all.isEmpty {
+                    self.sidebar.showCommentsTab()
+                }
             } catch {
                 // Silently ignore comment fetch failures.
             }

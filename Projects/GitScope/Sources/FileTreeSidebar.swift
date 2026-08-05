@@ -242,8 +242,37 @@ final class FileTreeSidebarController: NSViewController,
     private let filterField = NSSearchField()
     private let reviewedSummaryLabel = NSTextField(labelWithString: "")
     private let tabControl = NSSegmentedControl(
-        labels: ["文件", "Pull Requests"], trackingMode: .selectOne, target: nil, action: nil
+        labels: ["文件", "搜索", "评论", "PR"], trackingMode: .selectOne, target: nil, action: nil
     )
+    // Containers for search and comments content (set by MainWindowController).
+    var searchContentView: NSView? {
+        didSet {
+            guard let v = searchContentView else { return }
+            v.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(v)
+            v.isHidden = true
+            NSLayoutConstraint.activate([
+                v.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 6),
+                v.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                v.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                v.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ])
+        }
+    }
+    var commentsContentView: NSView? {
+        didSet {
+            guard let v = commentsContentView else { return }
+            v.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(v)
+            v.isHidden = true
+            NSLayoutConstraint.activate([
+                v.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 6),
+                v.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                v.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+                v.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            ])
+        }
+    }
 
     private func rebuildTree() {
         treeRoots = document.map {
@@ -363,16 +392,44 @@ final class FileTreeSidebarController: NSViewController,
     }
 
     @objc private func tabChanged() {
-        let showPRs = tabControl.selectedSegment == 1
-        pullRequestPanel.view.isHidden = !showPRs
-        scrollView.isHidden = showPRs
-        filterField.isHidden = showPRs
-        reviewedSummaryLabel.isHidden = showPRs
+        let seg = tabControl.selectedSegment
+        // Hide all content areas first.
+        scrollView.isHidden = true
+        filterField.isHidden = true
+        reviewedSummaryLabel.isHidden = true
+        pullRequestPanel.view.isHidden = true
+        searchContentView?.isHidden = true
+        commentsContentView?.isHidden = true
+        // Show the selected tab's content.
+        switch seg {
+        case 0: // Files
+            scrollView.isHidden = false
+            filterField.isHidden = false
+            reviewedSummaryLabel.isHidden = false
+        case 1: // Search
+            searchContentView?.isHidden = false
+        case 2: // Comments
+            commentsContentView?.isHidden = false
+        case 3: // PR
+            pullRequestPanel.view.isHidden = false
+        default:
+            break
+        }
     }
 
     /// Switches the sidebar back to the files tab (after a PR diff loads).
     func showFilesTab() {
         tabControl.selectedSegment = 0
+        tabChanged()
+    }
+    /// Switches to the search tab.
+    func showSearchTab() {
+        tabControl.selectedSegment = 1
+        tabChanged()
+    }
+    /// Switches to the comments tab.
+    func showCommentsTab() {
+        tabControl.selectedSegment = 2
         tabChanged()
     }
 
