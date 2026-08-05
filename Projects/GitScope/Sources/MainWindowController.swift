@@ -398,30 +398,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         statusLabel.lineBreakMode = .byTruncatingTail
     }
 
-    private func setupSidebarControls() {
+        private func setupSidebarControls() {
         let stack = sidebar.controlsStack
-
-        func labeledRow(_ label: String, _ control: NSView) -> NSStackView {
-            let text = NSTextField(labelWithString: label)
-            text.font = .systemFont(ofSize: 11)
-            text.textColor = .secondaryLabelColor
-            text.setContentHuggingPriority(.required, for: .horizontal)
-            let row = NSStackView(views: [text, control])
-            row.orientation = .horizontal
-            row.spacing = 6
-            return row
-        }
-
-        let swapButton = NSButton(title: "⇄ 交换", target: self, action: #selector(swapRefs))
-        swapButton.controlSize = .small
-        swapButton.bezelStyle = .rounded
-
-        commitPopup.target = self
-        commitPopup.action = #selector(commitSelectionChanged)
-        commitPopup.isEnabled = false
-
-        // PR mode banner (hidden until a PR is opened): shows what is being
-        // previewed and offers a way back to branch comparison.
+        // PR mode banner (hidden until a PR is opened).
         prTitleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         prTitleLabel.lineBreakMode = .byTruncatingTail
         prTitleLabel.maximumNumberOfLines = 2
@@ -433,7 +412,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         )
         exitPRButton.controlSize = .small
         exitPRButton.bezelStyle = .rounded
-
         prBanner.orientation = .vertical
         prBanner.alignment = .leading
         prBanner.spacing = 4
@@ -441,39 +419,17 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         prBanner.addArrangedSubview(prRefsLabel)
         prBanner.addArrangedSubview(exitPRButton)
         prBanner.isHidden = true
-
-        let baseRow = labeledRow("base", basePopup)
-        let headRow = labeledRow("head", headPopup)
-        branchControlRows = [baseRow, headRow, swapButton, modePopup]
-
         stack.addArrangedSubview(prBanner)
-        stack.addArrangedSubview(baseRow)
-        stack.addArrangedSubview(headRow)
-        stack.addArrangedSubview(swapButton)
-        stack.addArrangedSubview(modePopup)
-        stack.addArrangedSubview(labeledRow("提交", commitPopup))
-        stack.addArrangedSubview(labeledRow("显示", displayPopup))
-        stack.addArrangedSubview(labeledRow("主题", themePopup))
-        stack.addArrangedSubview(statusLabel)
-
         prBanner.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
             prTitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
             prRefsLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
         ])
-
-        // Fixed widths so controls don't stretch with the window.
-        for control in [basePopup, headPopup, modePopup, displayPopup, themePopup, commitPopup] {
-            control.translatesAutoresizingMaskIntoConstraints = false
-        }
-        NSLayoutConstraint.activate([
-            basePopup.widthAnchor.constraint(equalToConstant: 160),
-            headPopup.widthAnchor.constraint(equalToConstant: 160),
-            modePopup.widthAnchor.constraint(equalToConstant: 150),
-            commitPopup.widthAnchor.constraint(equalToConstant: 160),
-            displayPopup.widthAnchor.constraint(equalToConstant: 150),
-            themePopup.widthAnchor.constraint(equalToConstant: 150),
-        ])
+        // Branch controls now live in the toolbar; sidebar only has PR banner.
+        commitPopup.target = self
+        commitPopup.action = #selector(commitSelectionChanged)
+        commitPopup.isEnabled = false
+        branchControlRows = []
     }
 
     private func updateWindowTitle() {
@@ -481,33 +437,66 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         window?.title = repoName.map { "GitScope — \($0)" } ?? "GitScope"
     }
 
-    // MARK: NSToolbarDelegate
+        // MARK: NSToolbarDelegate
 
     private static let openRepoItemID = NSToolbarItem.Identifier("OpenRepository")
+    private static let branchItemID = NSToolbarItem.Identifier("BranchControls")
+    private static let statusItemID = NSToolbarItem.Identifier("StatusLabel")
 
     func toolbar(
         _ toolbar: NSToolbar,
         itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier,
         willBeInsertedIntoToolbar flag: Bool
     ) -> NSToolbarItem? {
-        guard itemIdentifier == Self.openRepoItemID else { return nil }
-        let item = NSToolbarItem(itemIdentifier: itemIdentifier)
-        item.label = "打开仓库"
-        item.paletteLabel = "打开仓库"
-        item.toolTip = "打开一个本地 Git 仓库"
-        item.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "打开仓库")
-        item.target = self
-        item.action = #selector(openRepository)
-        item.isBordered = true
-        return item
+        switch itemIdentifier {
+        case Self.openRepoItemID:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "打开仓库"
+            item.toolTip = "打开一个本地 Git 仓库"
+            item.image = NSImage(systemSymbolName: "folder.badge.plus", accessibilityDescription: "打开仓库")
+            item.target = self
+            item.action = #selector(openRepository)
+            item.isBordered = true
+            return item
+        case Self.branchItemID:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "分支"
+            // Compact row: base ↔ head + mode + commit + display
+            let row = NSStackView()
+            row.orientation = .horizontal
+            row.spacing = 6
+            row.alignment = .centerY
+            basePopup.controlSize = .small
+            headPopup.controlSize = .small
+            modePopup.controlSize = .small
+            commitPopup.controlSize = .small
+            displayPopup.controlSize = .small
+            let arrowLabel = NSTextField(labelWithString: "→")
+            arrowLabel.font = .systemFont(ofSize: 11)
+            arrowLabel.textColor = .secondaryLabelColor
+            row.addArrangedSubview(basePopup)
+            row.addArrangedSubview(arrowLabel)
+            row.addArrangedSubview(headPopup)
+            row.addArrangedSubview(modePopup)
+            row.addArrangedSubview(commitPopup)
+            row.addArrangedSubview(displayPopup)
+            item.view = row
+            return item
+        case Self.statusItemID:
+            let item = NSToolbarItem(itemIdentifier: itemIdentifier)
+            item.label = "状态"
+            statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+            item.view = statusLabel
+            return item
+        default:
+            return nil
+        }
     }
-
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.openRepoItemID]
+        [.toggleSidebar, .sidebarTrackingSeparator, Self.branchItemID, .flexibleSpace, Self.statusItemID, Self.openRepoItemID]
     }
-
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, .flexibleSpace, Self.openRepoItemID]
+        [.toggleSidebar, .sidebarTrackingSeparator, Self.branchItemID, .flexibleSpace, Self.statusItemID, Self.openRepoItemID]
     }
 
     // MARK: Actions
@@ -536,9 +525,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
             // A fresh repository always starts in branch-comparison mode.
             activePullRequest = nil
             prBanner.isHidden = true
-            branchControlRows.forEach { $0.isHidden = false }
-
-            self.repositoryURL = root
+                        self.repositoryURL = root
             self.refs = refs
             populateRefPopups(current: current)
             statusLabel.stringValue = "已加载 \(refs.count) 个引用"
@@ -613,7 +600,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         prTitleLabel.stringValue = "PR #\(pr.number) \(pr.title)"
         prRefsLabel.stringValue = "\(pr.headRef) → \(pr.baseRef)"
         prBanner.isHidden = false
-        branchControlRows.forEach { $0.isHidden = true }
+        // Hide toolbar branch controls in PR mode.
+        basePopup.isHidden = true
+        headPopup.isHidden = true
+        modePopup.isHidden = true
         diffList.showsReviewButtons = true
         // Set persistence key for review progress.
         if let slug = GitHubClient.repoSlug(fromRemoteURL: repoRemoteURL ?? "") {
@@ -623,7 +613,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     @objc private func exitPullRequestMode() {
         activePullRequest = nil
         prBanner.isHidden = true
-        branchControlRows.forEach { $0.isHidden = false }
+        // Restore toolbar branch controls.
+        basePopup.isHidden = false
+        headPopup.isHidden = false
+        modePopup.isHidden = false
         diffList.showsReviewButtons = false
         diffList.inlineComments = []
         commentsPanel.isHidden = true
