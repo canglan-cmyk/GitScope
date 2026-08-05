@@ -69,7 +69,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
 
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: defaultSize),
-            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
