@@ -380,7 +380,6 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
     }
 
         private func setupSidebarControls() {
-        let stack = sidebar.controlsStack
         // PR mode banner (hidden until a PR is opened).
         prTitleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
         prTitleLabel.lineBreakMode = .byTruncatingTail
@@ -400,13 +399,9 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         prBanner.addArrangedSubview(prRefsLabel)
         prBanner.addArrangedSubview(exitPRButton)
         prBanner.isHidden = true
-        stack.addArrangedSubview(prBanner)
-        prBanner.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            prTitleLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
-            prRefsLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 320),
-        ])
-        // Branch controls now live in the toolbar; sidebar only has PR banner.
+        // Add PR banner to sidebar's prBannerContainer.
+        sidebar.prBannerView = prBanner
+        // Branch controls now live in the toolbar.
         commitPopup.target = self
         commitPopup.action = #selector(commitSelectionChanged)
         commitPopup.isEnabled = false

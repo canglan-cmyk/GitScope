@@ -244,6 +244,24 @@ final class FileTreeSidebarController: NSViewController,
     private let tabControl = NSSegmentedControl(
         labels: ["文件", "搜索", "评论", "PR"], trackingMode: .selectOne, target: nil, action: nil
     )
+    // PR banner (set by MainWindowController, shown above tabs in PR mode).
+    var prBannerView: NSView? {
+        didSet {
+            guard let v = prBannerView else { return }
+            v.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(v)
+            NSLayoutConstraint.activate([
+                v.topAnchor.constraint(equalTo: view.topAnchor, constant: 4),
+                v.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+                v.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            ])
+            // Move tabControl below the banner when banner is visible.
+            tabTopConstraint?.isActive = false
+            tabTopConstraint = tabControl.topAnchor.constraint(equalTo: v.bottomAnchor, constant: 6)
+            tabTopConstraint?.isActive = true
+        }
+    }
+    private var tabTopConstraint: NSLayoutConstraint?
     // Containers for search and comments content (set by MainWindowController).
     var searchContentView: NSView? {
         didSet {
@@ -305,10 +323,6 @@ final class FileTreeSidebarController: NSViewController,
     override func loadView() {
         let container = NSView()
 
-        controlsStack.orientation = .vertical
-        controlsStack.alignment = .leading
-        controlsStack.spacing = 4
-        controlsStack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
 
         filterField.placeholderString = "过滤文件名"
         filterField.controlSize = .small
@@ -338,8 +352,6 @@ final class FileTreeSidebarController: NSViewController,
         scrollView.hasVerticalScroller = true
         scrollView.drawsBackground = false
 
-        let separator = NSBox()
-        separator.boxType = .separator
 
         tabControl.selectedSegment = 0
         tabControl.target = self
@@ -356,20 +368,13 @@ final class FileTreeSidebarController: NSViewController,
         let prView = pullRequestPanel.view
         prView.isHidden = true
 
-        for view in [controlsStack, separator, tabControl, filterRow, scrollView, prView] {
+        for view in [tabControl, filterRow, scrollView, prView] as [NSView] {
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
         }
+        tabTopConstraint = tabControl.topAnchor.constraint(equalTo: container.topAnchor, constant: 8)
         NSLayoutConstraint.activate([
-            controlsStack.topAnchor.constraint(equalTo: container.topAnchor),
-            controlsStack.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            controlsStack.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-
-            separator.topAnchor.constraint(equalTo: controlsStack.bottomAnchor),
-            separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
-            separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
-
-            tabControl.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
+            tabTopConstraint!,
             tabControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             tabControl.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
 
