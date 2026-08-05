@@ -372,7 +372,7 @@ final class FileTreeSidebarController: NSViewController,
             view.translatesAutoresizingMaskIntoConstraints = false
             container.addSubview(view)
         }
-        tabTopConstraint = tabControl.topAnchor.constraint(equalTo: container.topAnchor, constant: 8)
+        tabTopConstraint = tabControl.topAnchor.constraint(equalTo: container.topAnchor, constant: 0)
         NSLayoutConstraint.activate([
             tabTopConstraint!,
             tabControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
