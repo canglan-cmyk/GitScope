@@ -709,28 +709,41 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
 /// handles ⌘C / ⌘A. Selection state lives in the owning controller.
 @MainActor
 final class DiffSelectionTableView: NSTableView {
-
     weak var selectionOwner: DiffListViewController?
-
     private var isDraggingSelection = false
     private var autoscrollTimer: Timer?
+    private var cursorTrackingArea: NSTrackingArea?
 
     override var acceptsFirstResponder: Bool { true }
 
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let existing = cursorTrackingArea {
+            removeTrackingArea(existing)
+        }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseMoved, .activeInActiveApp, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        cursorTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        let point = convert(event.locationInWindow, from: nil)
+        let row = self.row(at: point)
+        if row >= 0, let owner = selectionOwner,
+           (owner.isFileHeaderRow(at: row) || owner.isExpandContextRow(at: row)) {
+            NSCursor.pointingHand.set()
+        } else {
+            NSCursor.iBeam.set()
+        }
+    }
+
     override func resetCursorRects() {
-        guard let owner = selectionOwner else {
-            super.resetCursorRects()
-            return
-        }
-        let visibleRows = rows(in: visibleRect)
-        for row in visibleRows.lowerBound..<visibleRows.upperBound {
-            let rowRect = rect(ofRow: row)
-            if owner.isFileHeaderRow(at: row) || owner.isExpandContextRow(at: row) {
-                addCursorRect(rowRect, cursor: .pointingHand)
-            } else {
-                addCursorRect(rowRect, cursor: .iBeam)
-            }
-        }
+        // Intentionally empty — cursor managed via mouseMoved tracking area.
     }
 
     override func mouseDown(with event: NSEvent) {
