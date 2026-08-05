@@ -97,7 +97,7 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         setupSidebarControls()
 
         // Split view: sidebar + content.
-        let sidebarItem = NSSplitViewItem(sidebarWithViewController: sidebar)
+        let sidebarItem = NSSplitViewItem(contentListWithViewController: sidebar)
         sidebarItem.minimumThickness = 220
         sidebarItem.maximumThickness = 400
         sidebarItem.canCollapse = true
@@ -474,10 +474,10 @@ final class MainWindowController: NSWindowController, NSToolbarDelegate, NSSearc
         }
     }
     func toolbarDefaultItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, Self.branchItemID, .flexibleSpace, Self.statusItemID, Self.openRepoItemID]
+        [.toggleSidebar, Self.branchItemID, .flexibleSpace, Self.statusItemID, Self.openRepoItemID]
     }
     func toolbarAllowedItemIdentifiers(_ toolbar: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.toggleSidebar, .sidebarTrackingSeparator, Self.branchItemID, .flexibleSpace, Self.statusItemID, Self.openRepoItemID]
+        [.toggleSidebar, Self.branchItemID, .flexibleSpace, Self.statusItemID, Self.openRepoItemID]
     }
 
     // MARK: Actions
