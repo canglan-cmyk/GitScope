@@ -271,8 +271,13 @@ extension CommentsPanel: NSOutlineViewDataSource {
 
 extension CommentsPanel: NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, heightOfRowByItem item: Any) -> CGFloat {
-        if item is FileGroup || item is NSString { return 28 }
-        return 52
+        if item is FileGroup || item is NSString { return 36 }
+        if let comment = item as? InlineComment {
+            // Estimate height based on body length.
+            let lineCount = min(max(comment.body.count / 40, 1), 4)
+            return CGFloat(20 + lineCount * 16)
+        }
+        return 60
     }
 
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
@@ -302,35 +307,37 @@ extension CommentsPanel: NSOutlineViewDelegate {
 
     private func makeFileHeaderCell(path: String, count: Int) -> NSView {
         let cell = NSTableCellView()
-        let label = NSTextField(labelWithString: "")
-        label.translatesAutoresizingMaskIntoConstraints = false
 
         let fileName = (path as NSString).lastPathComponent
         let dir = (path as NSString).deletingLastPathComponent
 
-        let attributed = NSMutableAttributedString()
-        attributed.append(NSAttributedString(
-            string: fileName,
-            attributes: [.font: NSFont.systemFont(ofSize: 12, weight: .semibold)]
-        ))
-        if !dir.isEmpty {
-            attributed.append(NSAttributedString(
-                string: "  \(dir.replacingOccurrences(of: "/", with: " › "))",
-                attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.secondaryLabelColor]
-            ))
-        }
-        attributed.append(NSAttributedString(
-            string: "  (\(count))",
-            attributes: [.font: NSFont.systemFont(ofSize: 11), .foregroundColor: NSColor.tertiaryLabelColor]
-        ))
-        label.attributedStringValue = attributed
-        label.lineBreakMode = .byTruncatingTail
+        // File name label (bold, truncate middle for long names).
+        let nameLabel = NSTextField(labelWithString: "")
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        nameLabel.font = .systemFont(ofSize: 12, weight: .semibold)
+        nameLabel.lineBreakMode = .byTruncatingMiddle
+        nameLabel.stringValue = fileName
 
-        cell.addSubview(label)
+        // Path + count label.
+        let pathLabel = NSTextField(labelWithString: "")
+        pathLabel.translatesAutoresizingMaskIntoConstraints = false
+        pathLabel.font = .systemFont(ofSize: 10)
+        pathLabel.textColor = .secondaryLabelColor
+        pathLabel.lineBreakMode = .byTruncatingMiddle
+        var pathText = dir.replacingOccurrences(of: "/", with: " › ")
+        pathText += "  (\(count))"
+        pathLabel.stringValue = pathText
+
+        cell.addSubview(nameLabel)
+        cell.addSubview(pathLabel)
         NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
-            label.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
-            label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            nameLabel.topAnchor.constraint(equalTo: cell.topAnchor, constant: 4),
+            nameLabel.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            nameLabel.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+
+            pathLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 1),
+            pathLabel.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 8),
+            pathLabel.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
         ])
         return cell
     }
@@ -338,45 +345,47 @@ extension CommentsPanel: NSOutlineViewDelegate {
     private func makeCommentCell(comment: InlineComment) -> NSView {
         let cell = NSTableCellView()
 
-        // Author + time line.
+        // Author + time + line number.
         let headerLabel = NSTextField(labelWithString: "")
         headerLabel.translatesAutoresizingMaskIntoConstraints = false
         let header = NSMutableAttributedString()
         header.append(NSAttributedString(
             string: comment.author,
-            attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .semibold)]
+            attributes: [.font: NSFont.systemFont(ofSize: 11, weight: .bold)]
         ))
         header.append(NSAttributedString(
             string: "  \(comment.relativeTime)",
             attributes: [.font: NSFont.systemFont(ofSize: 10), .foregroundColor: NSColor.secondaryLabelColor]
         ))
-        if let line = Optional(comment.line), line > 0 {
+        if comment.line > 0 {
             header.append(NSAttributedString(
-                string: "  L\(line)",
+                string: "    L\(comment.line)",
                 attributes: [.font: NSFont.monospacedSystemFont(ofSize: 10, weight: .regular), .foregroundColor: NSColor.tertiaryLabelColor]
             ))
         }
         headerLabel.attributedStringValue = header
+        headerLabel.lineBreakMode = .byTruncatingTail
 
-        // Body line.
-        let bodyLabel = NSTextField(labelWithString: "")
+        // Body — allow wrapping up to 4 lines.
+        let bodyLabel = NSTextField(wrappingLabelWithString: "")
         bodyLabel.translatesAutoresizingMaskIntoConstraints = false
         bodyLabel.font = .systemFont(ofSize: 11)
         bodyLabel.textColor = .labelColor
-        bodyLabel.lineBreakMode = .byTruncatingTail
-        bodyLabel.maximumNumberOfLines = 2
-        bodyLabel.stringValue = comment.body.replacingOccurrences(of: "\n", with: " ")
+        bodyLabel.maximumNumberOfLines = 4
+        bodyLabel.preferredMaxLayoutWidth = 280
+        bodyLabel.stringValue = comment.body.trimmingCharacters(in: .whitespacesAndNewlines)
 
         cell.addSubview(headerLabel)
         cell.addSubview(bodyLabel)
         NSLayoutConstraint.activate([
-            headerLabel.topAnchor.constraint(equalTo: cell.topAnchor, constant: 4),
+            headerLabel.topAnchor.constraint(equalTo: cell.topAnchor, constant: 6),
             headerLabel.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 12),
             headerLabel.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
 
-            bodyLabel.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 2),
+            bodyLabel.topAnchor.constraint(equalTo: headerLabel.bottomAnchor, constant: 3),
             bodyLabel.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 12),
             bodyLabel.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -8),
+            bodyLabel.bottomAnchor.constraint(lessThanOrEqualTo: cell.bottomAnchor, constant: -4),
         ])
         return cell
     }
