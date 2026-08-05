@@ -32,27 +32,26 @@ final class CommentsPanel: NSView {
 
     // MARK: UI
 
-    private let titleLabel: NSTextField = {
+        private let titleLabel: NSTextField = {
         let f = NSTextField(labelWithString: "评论")
         f.font = .systemFont(ofSize: 13, weight: .semibold)
         f.translatesAutoresizingMaskIntoConstraints = false
         return f
     }()
-
     private let closeButton: NSButton = {
         let btn = NSButton(
-            image: NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "关闭")!,
+            image: NSImage(systemSymbolName: "xmark.circle", accessibilityDescription: "关闭")!,
             target: nil, action: nil
         )
         btn.isBordered = false
+        btn.contentTintColor = .secondaryLabelColor
         btn.translatesAutoresizingMaskIntoConstraints = false
         return btn
     }()
-
     private let countLabel: NSTextField = {
         let f = NSTextField(labelWithString: "")
-        f.font = .systemFont(ofSize: 12)
-        f.textColor = .secondaryLabelColor
+        f.font = .systemFont(ofSize: 11)
+        f.textColor = .tertiaryLabelColor
         f.translatesAutoresizingMaskIntoConstraints = false
         return f
     }()

@@ -336,7 +336,7 @@ public final class DiffRowCellView: DiffRenderView {
         case .none:
             break
 
-        case .fileHeader(let title, let stats):
+                case .fileHeader(let title, let stats):
             // Dimmer background for collapsed (reviewed) files.
             if isCollapsed {
                 palette.hunkHeaderBackground.nsColor.withAlphaComponent(0.5).setFill()
@@ -344,37 +344,39 @@ public final class DiffRowCellView: DiffRenderView {
                 palette.hunkHeaderBackground.nsColor.setFill()
             }
             context.fill(bounds)
+            // Bottom border line.
             palette.gutterLine.nsColor.setFill()
-            context.fill(NSRect(x: 0, y: bounds.height - 1, width: bounds.width, height: 1))
-
+            context.fill(NSRect(x: 0, y: 0, width: bounds.width, height: 0.5))
+            // Left accent color bar (3pt wide, blue).
+            NSColor.controlAccentColor.setFill()
+            context.fill(NSRect(x: 0, y: 0, width: 3, height: bounds.height))
             // Collapse indicator: ▶ (collapsed) or ▼ (expanded).
             let indicator = isCollapsed ? "▶" : "▼"
             let indicatorLine = makeCTLine(indicator)
-            draw(line: indicatorLine, at: 4, baseline: bounds.height - 11, in: context, color: palette.secondaryText.nsColor)
-
+            let baseline = round((bounds.height - theme.fontSize) / 2) + 2
+            draw(line: indicatorLine, at: 8, baseline: baseline, in: context, color: palette.secondaryText.nsColor)
             let titleLine = makeCTLine(title, bold: true)
             let titleColor = isCollapsed ? palette.secondaryText.nsColor : palette.text.nsColor
-            draw(line: titleLine, at: 18, baseline: bounds.height - 11, in: context, color: titleColor)
+            draw(line: titleLine, at: 22, baseline: baseline, in: context, color: titleColor)
 
-            // "已看" label for collapsed files.
+                        // "已看" label for collapsed files.
             if isCollapsed {
                 let badge = makeCTLine("✓ 已看")
                 let badgeWidth = CTLineGetTypographicBounds(badge, nil, nil, nil)
                 draw(
                     line: badge,
                     at: bounds.width - CGFloat(badgeWidth) - 40,
-                    baseline: bounds.height - 11,
+                    baseline: baseline,
                     in: context,
                     color: NSColor.systemGreen
                 )
             }
-
             let statsLine = makeCTLine(stats)
             let statsWidth = CTLineGetTypographicBounds(statsLine, nil, nil, nil)
             draw(
                 line: statsLine,
                 at: bounds.width - CGFloat(statsWidth) - 12,
-                baseline: bounds.height - 11,
+                baseline: baseline,
                 in: context,
                 color: palette.secondaryText.nsColor
             )
@@ -412,19 +414,30 @@ public final class DiffRowCellView: DiffRenderView {
             )
 
         case .expandContext:
-            // Draw a centered "⋯ 展开更多上下文" clickable row.
-            palette.hunkHeaderBackground.nsColor.withAlphaComponent(0.3).setFill()
-            context.fill(bounds)
-            let text = "⋯ 展开更多上下文"
+            // Refined expand context row with dashed lines.
+            let midY = bounds.height / 2
+            let text = "•••"
             let ctLine = makeCTLine(text)
             let lineWidth = CTLineGetTypographicBounds(ctLine, nil, nil, nil)
             let centerX = (bounds.width - CGFloat(lineWidth)) / 2
+            // Dashed lines on both sides.
+            context.saveGState()
+            context.setStrokeColor(palette.gutterLine.nsColor.cgColor)
+            context.setLineWidth(0.5)
+            context.setLineDash(phase: 0, lengths: [4, 3])
+            context.move(to: CGPoint(x: 12, y: midY))
+            context.addLine(to: CGPoint(x: centerX - 8, y: midY))
+            context.move(to: CGPoint(x: centerX + CGFloat(lineWidth) + 8, y: midY))
+            context.addLine(to: CGPoint(x: bounds.width - 12, y: midY))
+            context.strokePath()
+            context.restoreGState()
+            // Center text.
             draw(
                 line: ctLine,
                 at: centerX,
-                baseline: bounds.height / 2 + 4,
+                baseline: midY + 4,
                 in: context,
-                color: NSColor.controlAccentColor
+                color: palette.secondaryText.nsColor
             )
 
         case .comment(let comment):
@@ -705,8 +718,13 @@ public final class DiffRowCellView: DiffRenderView {
 
     private func drawGutterSeparators(palette: DiffPalette, in context: CGContext) {
         context.saveGState()
+        // Subtle gutter background.
+        let gutterBg = palette.gutterLine.nsColor.withAlphaComponent(0.08)
+        context.setFillColor(gutterBg.cgColor)
+        context.fill(NSRect(x: 0, y: 0, width: gutterWidth, height: bounds.height))
+        // Separator lines.
         context.setStrokeColor(palette.gutterLine.nsColor.cgColor)
-        context.setLineWidth(1)
+        context.setLineWidth(0.5)
         for x in [gutterColumnWidth - 0.5, gutterWidth - 0.5] {
             context.move(to: CGPoint(x: x, y: 0))
             context.addLine(to: CGPoint(x: x, y: bounds.height))

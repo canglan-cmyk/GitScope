@@ -278,8 +278,8 @@ final class FileTreeSidebarController: NSViewController,
 
         controlsStack.orientation = .vertical
         controlsStack.alignment = .leading
-        controlsStack.spacing = 8
-        controlsStack.edgeInsets = NSEdgeInsets(top: 12, left: 12, bottom: 12, right: 12)
+        controlsStack.spacing = 4
+        controlsStack.edgeInsets = NSEdgeInsets(top: 8, left: 12, bottom: 8, right: 12)
 
         filterField.placeholderString = "过滤文件名"
         filterField.controlSize = .small
@@ -315,7 +315,7 @@ final class FileTreeSidebarController: NSViewController,
         tabControl.selectedSegment = 0
         tabControl.target = self
         tabControl.action = #selector(tabChanged)
-        tabControl.controlSize = .small
+        tabControl.controlSize = .mini
         tabControl.segmentDistribution = .fillEqually
 
         let filterRow = NSStackView(views: [filterField, reviewedSummaryLabel])
@@ -340,15 +340,15 @@ final class FileTreeSidebarController: NSViewController,
             separator.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             separator.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
-            tabControl.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 8),
+            tabControl.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 6),
             tabControl.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 12),
             tabControl.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -12),
 
-            filterRow.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 8),
+            filterRow.topAnchor.constraint(equalTo: tabControl.bottomAnchor, constant: 6),
             filterRow.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             filterRow.trailingAnchor.constraint(equalTo: container.trailingAnchor),
 
-            scrollView.topAnchor.constraint(equalTo: filterRow.bottomAnchor, constant: 6),
+            scrollView.topAnchor.constraint(equalTo: filterRow.bottomAnchor, constant: 4),
             scrollView.leadingAnchor.constraint(equalTo: container.leadingAnchor),
             scrollView.trailingAnchor.constraint(equalTo: container.trailingAnchor),
             scrollView.bottomAnchor.constraint(equalTo: container.bottomAnchor),

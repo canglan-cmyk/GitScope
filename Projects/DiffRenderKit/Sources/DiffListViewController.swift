@@ -285,7 +285,7 @@ public final class DiffListViewController: NSViewController, NSTableViewDataSour
     /// Off-screen metrics provider (row height for the current theme/font).
     private let metricsView = DiffRowCellView(frame: .zero)
 
-    private let fileHeaderRowHeight: CGFloat = 32
+    private let fileHeaderRowHeight: CGFloat = 28
 
     public override func loadView() {
         tableView.selectionOwner = self
